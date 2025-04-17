@@ -25,6 +25,7 @@ from pyiron_workflow_vasp.vasp import (
     generate_modified_incar,
     construct_sequential_VaspInput_from_vaspoutput_structure
 )
+from pyiron_workflow_vasp.vasp_parser.output import parse_vasp_directory
 from pyiron_workflow_assyst.structure_filter_utils import RCORE, is_valid_structure
 
 def select_indices_by_threshold(array, threshold):
@@ -234,7 +235,7 @@ def get_ASSYST_deformed_structures(
                     max_cell_strain=rattle_strain,
                 )
                 if is_valid_structure(rattled, min_dist = min_dist, core_overlap_tolerance=core_overlap_tolerance):
-                    rattled_structures.append(rattled)
+                    rattled_structures.append(AseAtomsAdaptor.get_atoms(rattled))
                     job_names.append(f"{job_basename[idx]}_rattle_{len(rattled_structures)}")
                 else:
                     print(f"Failed rattle generation: n={attempts}")
@@ -248,7 +249,7 @@ def get_ASSYST_deformed_structures(
             while len(triaxed_structures) < n_stretch_permutations:
                 triaxed = apply_triaxial_strain(structure, max_strain=triaxial_strain)
                 if is_valid_structure(triaxed, min_dist = min_dist, core_overlap_tolerance=core_overlap_tolerance):
-                    triaxed_structures.append(triaxed)
+                    triaxed_structures.append(AseAtomsAdaptor.get_atoms(triaxed))
                     job_names.append(f"{job_basename[idx]}_triax_{len(triaxed_structures)}")
                 else:
                     print(f"Failed triax generation: n={attempts}")
@@ -261,7 +262,7 @@ def get_ASSYST_deformed_structures(
             while len(sheared_structures) < n_stretch_permutations:
                 sheared = apply_shear_strain(structure, max_strain=shear_strain)
                 if is_valid_structure(sheared, min_dist = min_dist, core_overlap_tolerance=core_overlap_tolerance):
-                    sheared_structures.append(sheared)
+                    sheared_structures.append(AseAtomsAdaptor.get_atoms(sheared))
                     job_names.append(f"{job_basename[idx]}_shear_{len(sheared_structures)}")
                 else:
                     print(f"Failed sheared generation: n={attempts}")
@@ -301,7 +302,17 @@ def get_ionic_steps_dict(incar, ionic_steps):
 def get_df_from_vaspfornode(vaspfornode):
     df = pd.concat(vaspfornode.vasp_output.values)
     return df
-    
+
+@pwf.as_function_node
+def convert_ase_to_pymatgen(ase_structure):
+    atoms = AseAtomsAdaptor.get_atoms(ase_structure)
+    return atoms
+
+@pwf.as_function_node
+def convert_pymatgen_to_ase(pymatgen_structure):
+    structure = AseAtomsAdaptor.get_structure(pymatgen_structure)
+    return structure
+
 @pwf.as_macro_node
 def run_ASSYST_on_structure(
     wf,
@@ -322,19 +333,29 @@ def run_ASSYST_on_structure(
     compress_dirs=True,
     compressed_file_in_dir=False,
     remove_calc_dirs=True,
-    train_df_filename="df_ASSYST_jobs.pkl"
+    train_df_filename="df_ASSYST_jobs.pkl",
+    vasp_parser_function=parse_vasp_directory,
+    vasp_parser_args={},
 ):
+    wf.base_structure = convert_pymatgen_to_ase(structure)
     wf.ISIF_7_modded_ionicsteps_dict = get_ionic_steps_dict(incar, ionic_steps=ionic_steps)
    
     wf.ISIF7_incar = generate_modified_incar(wf.ISIF_7_modded_ionicsteps_dict , {"ISIF": 7})
     wf.ISIF7_input = generate_VaspInput(
-        structure=structure, incar=wf.ISIF7_incar, potcar_paths=potcar_paths
+        structure=wf.base_structure, incar=wf.ISIF7_incar, potcar_paths=potcar_paths
     )
     # This is really unpleasant
     wf.ISIF7_jobname = get_string(job_name + "/ISIF7")
     # Relax cell volume w/fixed cell shape, atoms
     wf.ISIF7_job = vasp_job(
-        workdir=wf.ISIF7_jobname, vasp_input=wf.ISIF7_input, command=vasp_command, compress=compress_dirs, compressed_file_in_dir=compressed_file_in_dir, remove_calc_dir=remove_calc_dirs
+        workdir=wf.ISIF7_jobname,
+        vasp_input=wf.ISIF7_input,
+        command=vasp_command,
+        compress=compress_dirs,
+        compressed_file_in_dir=compressed_file_in_dir,
+        remove_calc_dir=remove_calc_dirs,
+        parser_function=vasp_parser_function,
+        parser_args=vasp_parser_args
     )
     wf.ISIF5_incar = generate_modified_incar(incar, {"ISIF": 5})
     wf.ISIF5_input = construct_sequential_VaspInput_from_vaspoutput_structure(
@@ -345,7 +366,14 @@ def run_ASSYST_on_structure(
     wf.ISIF5_jobname = get_string(job_name + "/ISIF5")
     # Relax cell shape w/fixed atoms
     wf.ISIF5_job = vasp_job(
-        workdir=wf.ISIF5_jobname, vasp_input=wf.ISIF5_input, command=vasp_command, compress=compress_dirs, compressed_file_in_dir=compressed_file_in_dir, remove_calc_dir=remove_calc_dirs
+        workdir=wf.ISIF5_jobname,
+        vasp_input=wf.ISIF5_input,
+        command=vasp_command,
+        compress=compress_dirs,
+        compressed_file_in_dir=compressed_file_in_dir,
+        remove_calc_dir=remove_calc_dirs,
+        parser_function=vasp_parser_function,
+        parser_args=vasp_parser_args
     )
     wf.ISIF2_incar = generate_modified_incar(incar, {"ISIF": 2})
     wf.ISIF2_input = construct_sequential_VaspInput_from_vaspoutput_structure(
@@ -356,7 +384,14 @@ def run_ASSYST_on_structure(
     wf.ISIF2_jobname = get_string(job_name + "/ISIF2")
     # Relaxation of atoms in fixed cell
     wf.ISIF2_job = vasp_job(
-        workdir=wf.ISIF2_jobname, vasp_input=wf.ISIF2_input, command=vasp_command, compress=compress_dirs, compressed_file_in_dir=compressed_file_in_dir, remove_calc_dir=remove_calc_dirs
+        workdir=wf.ISIF2_jobname,
+        vasp_input=wf.ISIF2_input,
+        command=vasp_command,
+        compress=compress_dirs,
+        compressed_file_in_dir=compressed_file_in_dir,
+        remove_calc_dir=remove_calc_dirs,
+        parser_function=vasp_parser_function,
+        parser_args=vasp_parser_args
     )
     wf.ISIF_vaspoutputs = pwf.inputs_to_list(
         1,
@@ -398,7 +433,9 @@ def run_ASSYST_on_structure(
         command=vasp_command,
         compress=compress_dirs,
         compressed_file_in_dir=compressed_file_in_dir,
-        remove_calc_dir=remove_calc_dirs
+        remove_calc_dir=remove_calc_dirs,
+        parser_function=vasp_parser_function,
+        parser_args=vasp_parser_args
     )
 
     wf.ASSYST_permutation_structures = get_ASSYST_deformed_structures(
@@ -432,7 +469,9 @@ def run_ASSYST_on_structure(
         command=vasp_command,
         compress=compress_dirs,
         compressed_file_in_dir=compressed_file_in_dir,
-        remove_calc_dir = remove_calc_dirs
+        remove_calc_dir = remove_calc_dirs,
+        parser_function=vasp_parser_function,
+        parser_args=vasp_parser_args
     )
     wf.ASSYST_permutation_df = get_df_from_vaspfornode(wf.ASSYST_permutation_structure_jobs)
     wf.ASSYST_base_df = get_df_from_vaspfornode(wf.ASSYST_base_structure_jobs)
