@@ -364,8 +364,8 @@ def run_ASSYST_on_structure(
         compress=compress_dirs,
         compressed_file_in_dir=compressed_file_in_dir,
         remove_calc_dir=remove_calc_dirs,
-        parser_function=vasp_parser_function,
-        parser_args=vasp_parser_args
+        vasp_parser_function=vasp_parser_function,
+        vasp_parser_args=vasp_parser_args
     )
     wf.ISIF5_incar = generate_modified_incar(incar, {"ISIF": 5})
     wf.ISIF5_input = construct_sequential_VaspInput_from_vaspoutput_structure(
@@ -382,8 +382,8 @@ def run_ASSYST_on_structure(
         compress=compress_dirs,
         compressed_file_in_dir=compressed_file_in_dir,
         remove_calc_dir=remove_calc_dirs,
-        parser_function=vasp_parser_function,
-        parser_args=vasp_parser_args
+        vasp_parser_function=vasp_parser_function,
+        vasp_parser_args=vasp_parser_args
     )
     wf.ISIF2_incar = generate_modified_incar(incar, {"ISIF": 2})
     wf.ISIF2_input = construct_sequential_VaspInput_from_vaspoutput_structure(
@@ -400,8 +400,8 @@ def run_ASSYST_on_structure(
         compress=compress_dirs,
         compressed_file_in_dir=compressed_file_in_dir,
         remove_calc_dir=remove_calc_dirs,
-        parser_function=vasp_parser_function,
-        parser_args=vasp_parser_args
+        vasp_parser_function=vasp_parser_function,
+        vasp_parser_args=vasp_parser_args
     )
     wf.ISIF_vaspoutputs = pwf.inputs_to_list(
         1,
@@ -444,8 +444,8 @@ def run_ASSYST_on_structure(
         compress=compress_dirs,
         compressed_file_in_dir=compressed_file_in_dir,
         remove_calc_dir=remove_calc_dirs,
-        parser_function=vasp_parser_function,
-        parser_args=vasp_parser_args
+        vasp_parser_function=vasp_parser_function,
+        vasp_parser_args=vasp_parser_args
     )
 
     wf.ASSYST_permutation_structures = get_ASSYST_deformed_structures(
@@ -480,8 +480,8 @@ def run_ASSYST_on_structure(
         compress=compress_dirs,
         compressed_file_in_dir=compressed_file_in_dir,
         remove_calc_dir = remove_calc_dirs,
-        parser_function=vasp_parser_function,
-        parser_args=vasp_parser_args
+        vasp_parser_function=vasp_parser_function,
+        vasp_parser_args=vasp_parser_args
     )
     wf.ASSYST_permutation_df = get_df_from_vaspfornode(wf.ASSYST_permutation_structure_jobs)
     wf.ASSYST_base_df = get_df_from_vaspfornode(wf.ASSYST_base_structure_jobs)
