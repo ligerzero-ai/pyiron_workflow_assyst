@@ -17,16 +17,26 @@ from pymatgen.transformations.standard_transformations import (
 import pyiron_workflow as pwf
 from pyiron_workflow import standard_nodes as std
 from pyiron_workflow import for_node, Workflow
-from pyiron_workflow_vasp.vasp import (
-    VaspInput,
-    vasp_job,
-    get_multiple_input,
-    generate_VaspInput,
-    generate_modified_incar,
-    construct_sequential_VaspInput_from_vaspoutput_structure
-)
-from pyiron_workflow_vasp.vasp_parser.output import parse_vasp_directory
-from pyiron_workflow_assyst.structure_filter_utils import RCORE, is_valid_structure
+
+# VASP-specific imports
+try:
+    from pyiron_workflow_vasp.vasp import (
+        VaspInput,
+        vasp_job,
+        get_multiple_input,
+        generate_VaspInput,
+        generate_modified_incar,
+        construct_sequential_VaspInput_from_vaspoutput_structure
+    )
+    from pyiron_workflow_vasp.vasp_parser.output import parse_vasp_directory
+except ImportError:
+    raise ImportError(
+        "pyiron_workflow_vasp is required for this package. "
+        "Please install it using: pip install pyiron_workflow_vasp"
+    )
+
+# Local imports
+from .structure_filter_utils import RCORE, is_valid_structure
 
 def select_indices_by_threshold(array, threshold):
     """
