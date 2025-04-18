@@ -314,14 +314,13 @@ def get_df_from_vaspfornode(vaspfornode):
     return df
 
 @pwf.as_function_node
-def convert_ase_to_pymatgen(ase_structure):
-    atoms = AseAtomsAdaptor.get_atoms(ase_structure)
+def convert_pymatgen_to_ase(pymatgen_structure):
+    atoms = AseAtomsAdaptor.get_atoms(pymatgen_structure)
     return atoms
 
 @pwf.as_function_node
-def convert_pymatgen_to_ase(pymatgen_structure):
-    structure = AseAtomsAdaptor.get_structure(pymatgen_structure)
-    print(type(structure))
+def convert_ase_to_pymatgen(ase_structure):
+    structure = AseAtomsAdaptor.get_structure(ase_structure)
     return structure
 
 @pwf.as_macro_node
@@ -348,11 +347,12 @@ def run_ASSYST_on_structure(
     vasp_parser_function=parse_vasp_directory,
     vasp_parser_args={},
 ):
+    wf.base_structure = convert_pymatgen_to_ase(structure)
     wf.ISIF_7_modded_ionicsteps_dict = get_ionic_steps_dict(incar, ionic_steps=ionic_steps)
    
     wf.ISIF7_incar = generate_modified_incar(wf.ISIF_7_modded_ionicsteps_dict , {"ISIF": 7})
     wf.ISIF7_input = generate_VaspInput(
-        structure=structure, incar=wf.ISIF7_incar, potcar_paths=potcar_paths
+        structure=wf.base_structure.outputs.atoms, incar=wf.ISIF7_incar, potcar_paths=potcar_paths
     )
     # This is really unpleasant
     wf.ISIF7_jobname = get_string(job_name + "/ISIF7")
