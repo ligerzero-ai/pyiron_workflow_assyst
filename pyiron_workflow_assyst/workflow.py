@@ -321,6 +321,7 @@ def convert_ase_to_pymatgen(ase_structure):
 @pwf.as_function_node
 def convert_pymatgen_to_ase(pymatgen_structure):
     structure = AseAtomsAdaptor.get_structure(pymatgen_structure)
+    print(type(structure))
     return structure
 
 @pwf.as_macro_node
