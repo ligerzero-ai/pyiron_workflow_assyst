@@ -323,6 +323,14 @@ def convert_ase_to_pymatgen(ase_structure):
     structure = AseAtomsAdaptor.get_structure(ase_structure)
     return structure
 
+@pwf.as_function_node
+def get_vasp_parser_args(directory):
+    return {"directory": directory}
+
+@pwf.as_function_node
+def get_multiple_vasp_parser_args(directories):
+    return [{"directory": directory} for directory in directories]
+
 @pwf.as_macro_node
 def run_ASSYST_on_structure(
     wf,
@@ -356,6 +364,7 @@ def run_ASSYST_on_structure(
     )
     # This is really unpleasant
     wf.ISIF7_jobname = get_string(job_name + "/ISIF7")
+    wf.ISIF7_vasp_parser_args = get_vasp_parser_args(wf.ISIF7_jobname)
     # Relax cell volume w/fixed cell shape, atoms
     wf.ISIF7_job = vasp_job(
         workdir=wf.ISIF7_jobname,
@@ -365,7 +374,7 @@ def run_ASSYST_on_structure(
         compressed_file_in_dir=compressed_file_in_dir,
         remove_calc_dir=remove_calc_dirs,
         vasp_parser_function=vasp_parser_function,
-        vasp_parser_args=vasp_parser_args
+        vasp_parser_args=wf.ISIF7_vasp_parser_args
     )
     wf.ISIF5_incar = generate_modified_incar(incar, {"ISIF": 5})
     wf.ISIF5_input = construct_sequential_VaspInput_from_vaspoutput_structure(
@@ -374,6 +383,7 @@ def run_ASSYST_on_structure(
         potcar_paths=potcar_paths,
     )
     wf.ISIF5_jobname = get_string(job_name + "/ISIF5")
+    wf.ISIF5_vasp_parser_args = get_vasp_parser_args(wf.ISIF5_jobname)
     # Relax cell shape w/fixed atoms
     wf.ISIF5_job = vasp_job(
         workdir=wf.ISIF5_jobname,
@@ -383,7 +393,7 @@ def run_ASSYST_on_structure(
         compressed_file_in_dir=compressed_file_in_dir,
         remove_calc_dir=remove_calc_dirs,
         vasp_parser_function=vasp_parser_function,
-        vasp_parser_args=vasp_parser_args
+        vasp_parser_args=wf.ISIF5_vasp_parser_args
     )
     wf.ISIF2_incar = generate_modified_incar(incar, {"ISIF": 2})
     wf.ISIF2_input = construct_sequential_VaspInput_from_vaspoutput_structure(
@@ -392,6 +402,7 @@ def run_ASSYST_on_structure(
         potcar_paths=potcar_paths,
     )
     wf.ISIF2_jobname = get_string(job_name + "/ISIF2")
+    wf.ISIF2_vasp_parser_args = get_vasp_parser_args(wf.ISIF2_jobname)
     # Relaxation of atoms in fixed cell
     wf.ISIF2_job = vasp_job(
         workdir=wf.ISIF2_jobname,
@@ -401,7 +412,7 @@ def run_ASSYST_on_structure(
         compressed_file_in_dir=compressed_file_in_dir,
         remove_calc_dir=remove_calc_dirs,
         vasp_parser_function=vasp_parser_function,
-        vasp_parser_args=vasp_parser_args
+        vasp_parser_args=wf.ISIF2_vasp_parser_args
     )
     wf.ISIF_vaspoutputs = pwf.inputs_to_list(
         1,
@@ -435,9 +446,10 @@ def run_ASSYST_on_structure(
         incar_list=wf.get_incar_list.outputs.objects_list,
         potcar_paths=wf.get_potcar_paths_base,
     )
+    wf.ASSYST_base_vasp_parser_args = get_multiple_vasp_parser_args(wf.ASSYST_base_structures.outputs.filtered_job_names)
     wf.ASSYST_base_structure_jobs = for_node(
         vasp_job,
-        zip_on=("vasp_input", "workdir"),
+        zip_on=("vasp_input", "workdir", "vasp_parser_args"),
         vasp_input=wf.ASSYST_base_VaspInputs.outputs.VaspInputs,
         workdir=wf.ASSYST_base_structures.outputs.filtered_job_names,
         command=vasp_command,
@@ -445,7 +457,7 @@ def run_ASSYST_on_structure(
         compressed_file_in_dir=compressed_file_in_dir,
         remove_calc_dir=remove_calc_dirs,
         vasp_parser_function=vasp_parser_function,
-        vasp_parser_args=vasp_parser_args
+        vasp_parser_args=wf.ASSYST_base_vasp_parser_args
     )
 
     wf.ASSYST_permutation_structures = get_ASSYST_deformed_structures(
@@ -471,9 +483,10 @@ def run_ASSYST_on_structure(
         incar_list=wf.get_permutations_incar_list.outputs.objects_list,
         potcar_paths=wf.get_potcar_paths_perms,
     )
+    wf.ASSYST_permutation_vasp_parser_args = get_multiple_vasp_parser_args(wf.ASSYST_permutation_structures.outputs.job_names)
     wf.ASSYST_permutation_structure_jobs = for_node(
         vasp_job,
-        zip_on=("vasp_input", "workdir"),
+        zip_on=("vasp_input", "workdir", "vasp_parser_args"),
         vasp_input=wf.ASSYST_permutation_VaspInputs.outputs.VaspInputs,
         workdir=wf.ASSYST_permutation_structures.outputs.job_names,
         command=vasp_command,
@@ -481,7 +494,7 @@ def run_ASSYST_on_structure(
         compressed_file_in_dir=compressed_file_in_dir,
         remove_calc_dir = remove_calc_dirs,
         vasp_parser_function=vasp_parser_function,
-        vasp_parser_args=vasp_parser_args
+        vasp_parser_args=wf.ASSYST_permutation_vasp_parser_args
     )
     wf.ASSYST_permutation_df = get_df_from_vaspfornode(wf.ASSYST_permutation_structure_jobs)
     wf.ASSYST_base_df = get_df_from_vaspfornode(wf.ASSYST_base_structure_jobs)
