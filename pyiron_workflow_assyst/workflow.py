@@ -325,11 +325,11 @@ def convert_ase_to_pymatgen(ase_structure):
 
 @pwf.as_function_node
 def get_vasp_parser_args(directory):
-    return {"working_directory": directory}
+    return {"directory": directory}
 
 @pwf.as_function_node
 def get_multiple_vasp_parser_args(directories):
-    return [{"working_directory": directory} for directory in directories]
+    return [{"directory": directory} for directory in directories]
 
 @pwf.as_macro_node
 def run_ASSYST_on_structure(
