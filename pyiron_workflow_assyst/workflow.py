@@ -111,7 +111,7 @@ def collect_structures(
 
         # Extract structures, energies, SCF convergence, and job names for the selected indices
         structures = [
-            Structure.from_str(df.structures.iloc[0][i], fmt="json")
+            AseAtomsAdaptor.get_atoms(Structure.from_str(df.structures.iloc[0][i], fmt="json"))
             for i in selected_indices
         ]
         for structure in structures:
@@ -229,8 +229,8 @@ def get_ASSYST_deformed_structures(
     """
     all_structures = []
     job_names = []
-
-    for idx, structure in enumerate(structure_list):
+    atoms_list = [AseAtomsAdaptor.get_atoms(structure) for structure in structure_list]
+    for idx, structure in enumerate(atoms_list):
         rattled_structures = []
         triaxed_structures = []
         sheared_structures = []
@@ -325,11 +325,11 @@ def convert_ase_to_pymatgen(ase_structure):
 
 @pwf.as_function_node
 def get_vasp_parser_args(directory):
-    return {"directory": directory}
+    return {"working_directory": directory}
 
 @pwf.as_function_node
 def get_multiple_vasp_parser_args(directories):
-    return [{"directory": directory} for directory in directories]
+    return [{"working_directory": directory} for directory in directories]
 
 @pwf.as_macro_node
 def run_ASSYST_on_structure(
