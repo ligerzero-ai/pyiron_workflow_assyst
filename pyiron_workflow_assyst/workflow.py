@@ -144,7 +144,7 @@ def collect_structures(
             filtered_structures.append(structure)
             filtered_scf_convergence.append(scf)
             filtered_job_names.append(job_name)
-    print(filtered_structures[-1])
+
     return (
         filtered_energies,
         filtered_structures,
@@ -229,8 +229,7 @@ def get_ASSYST_deformed_structures(
     """
     all_structures = []
     job_names = []
-    atoms_list = [AseAtomsAdaptor.get_atoms(structure) for structure in structure_list]
-    for idx, structure in enumerate(atoms_list):
+    for idx, structure in enumerate([AseAtomsAdaptor.get_structure(structure) for structure in structure_list]):
         rattled_structures = []
         triaxed_structures = []
         sheared_structures = []
