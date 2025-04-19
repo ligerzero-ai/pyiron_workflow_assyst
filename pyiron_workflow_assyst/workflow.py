@@ -144,7 +144,7 @@ def collect_structures(
             filtered_structures.append(structure)
             filtered_scf_convergence.append(scf)
             filtered_job_names.append(job_name)
-    
+    print(filtered_structures[-1])
     return (
         filtered_energies,
         filtered_structures,
