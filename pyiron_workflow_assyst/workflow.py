@@ -15,8 +15,9 @@ from pymatgen.transformations.standard_transformations import (
 
 # PyIron Workflow and Nodes
 import pyiron_workflow as pwf
-from pyiron_workflow import standard_nodes as std
-from pyiron_workflow import for_node, Workflow
+from pyiron_workflow.api import std
+from pyiron_workflow import Workflow
+from pyiron_workflow.api import for_node
 
 # VASP-specific imports
 try:
@@ -98,7 +99,7 @@ def collect_structures(
     for node_idx, (df, job_name) in enumerate(zip(df_list, job_names)):
         structure = Structure.from_str(df.structures.iloc[0][-1], fmt="json")
         df["eV_atom"] = [row.energy / len(structure) for _, row in df.iterrows()]
-        
+
         if image_selection_eVatom_threshold == -1:
             # Select only the last index
             selected_indices = [len(df.eV_atom.iloc[0]) - 1]
@@ -306,7 +307,7 @@ def get_ionic_steps_dict(incar, ionic_steps):
     modded_incar = incar.copy()
     modded_incar["NSW"] = ionic_steps
     return modded_incar
-    
+
 @pwf.as_function_node
 def get_df_from_vaspfornode(vaspfornode):
     df = pd.concat(vaspfornode.vasp_output.values)
@@ -339,7 +340,7 @@ def run_ASSYST_on_structure(
     ionic_steps=100,
     n_stretch_permutations=2,
     n_rattle_permutations=2,
-    image_selection_eVatom_threshold = -1, 
+    image_selection_eVatom_threshold = -1,
     shear_strain=0.8,
     triaxial_strain=0.8,
     rattle_displacement=0.1,
@@ -354,9 +355,9 @@ def run_ASSYST_on_structure(
     vasp_parser_function=parse_vasp_directory,
     #vasp_parser_args={},
 ):
-    wf.base_structure = structure #convert_pymatgen_to_ase(structure)
+    wf.base_structure = convert_pymatgen_to_ase(structure)
     wf.ISIF_7_modded_ionicsteps_dict = get_ionic_steps_dict(incar, ionic_steps=ionic_steps)
-   
+
     wf.ISIF7_incar = generate_modified_incar(wf.ISIF_7_modded_ionicsteps_dict , {"ISIF": 7})
     wf.ISIF7_input = generate_VaspInput(
         structure=wf.base_structure.outputs.atoms, incar=wf.ISIF7_incar, potcar_paths=potcar_paths
@@ -413,11 +414,11 @@ def run_ASSYST_on_structure(
         vasp_parser_function=vasp_parser_function,
         vasp_parser_args=wf.ISIF2_vasp_parser_args
     )
-    wf.ISIF_vaspoutputs = pwf.inputs_to_list(
+    wf.ISIF_vaspoutputs = pwf.api.inputs_to_list(
         1,
         wf.ISIF2_job.outputs.vasp_output,
     )
-    wf.ISIF_jobnames = pwf.inputs_to_list(
+    wf.ISIF_jobnames = pwf.api.inputs_to_list(
         1,
         wf.ISIF2_jobname,
     )
@@ -432,7 +433,7 @@ def run_ASSYST_on_structure(
         {"KSPACING": 0.25, "EDIFFG": 1e-4, "EDIFF": 1e-5, "LREAL": False, "NSW": 0},
     )
 
-    wf.n_base_jobs = pwf.standard_nodes.Length(
+    wf.n_base_jobs = std.Length(
         wf.ASSYST_base_structures.outputs.filtered_structures
     )
     wf.get_incar_list = get_multiple_input(
@@ -470,7 +471,7 @@ def run_ASSYST_on_structure(
         rattle_strain=rattle_strain,
         core_overlap_tolerance=core_overlap_tolerance
     )
-    wf.n_perm_jobs = pwf.standard_nodes.Length(
+    wf.n_perm_jobs = std.Length(
         wf.ASSYST_permutation_structures.outputs.job_names
     )
     wf.get_potcar_paths_perms = get_multiple_input(potcar_paths, n=wf.n_perm_jobs)
@@ -497,7 +498,7 @@ def run_ASSYST_on_structure(
     )
     wf.ASSYST_permutation_df = get_df_from_vaspfornode(wf.ASSYST_permutation_structure_jobs)
     wf.ASSYST_base_df = get_df_from_vaspfornode(wf.ASSYST_base_structure_jobs)
-    wf.final_dflist_input = pwf.inputs_to_list(
+    wf.final_dflist_input = pwf.api.inputs_to_list(
         2,
         wf.ASSYST_permutation_df,
         wf.ASSYST_base_df
