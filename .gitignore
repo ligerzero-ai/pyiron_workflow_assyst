@@ -1,0 +1,19 @@
+# Pixi environment (build artifact, not part of the repo)
+.pixi/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# pyiron log
+pyiron.log
+
+# Editor / OS
+.DS_Store
+.vscode/
+*.swp
