@@ -7,6 +7,7 @@ _DEFERRED = {
     "apply_shear_strain": ".deformations",
     "apply_triaxial_strain": ".deformations",
     "generate_assyst_permutations": ".permutations",
+    "pyxtal_random_crystals": ".generate",
 }
 
 
@@ -35,4 +36,5 @@ __all__ = [
     "generate_assyst_permutations",
     "get_minimum_distance",
     "is_valid_structure",
+    "pyxtal_random_crystals",
 ]
