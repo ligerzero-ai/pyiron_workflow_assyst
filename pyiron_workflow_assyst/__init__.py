@@ -1,18 +1,40 @@
-"""
-pyiron_workflow_assyst - A workflow package for ASSYST (Automated Symmetry and Stability Testing)
+"""pyiron_workflow_assyst — ASSYST training-set generation workflows for pyiron.
+
+The package follows ``pyiron_workflow_atomistics`` design principles: physics
+workflows are engine-agnostic and route through the ``Engine`` Protocol;
+structure operations are pure ASE-in / ASE-out; post-processing operates on
+``EngineOutput``.
+
+Subpackages
+-----------
+structure : engine-agnostic builders, deformations, filters, permutations
+physics   : ``multistage_relax``, ``run_assyst`` macros
+analysis  : trajectory frame collection, training-set export
+testing   : shared pytest fixtures
+
+Import the workflows per topic::
+
+    from pyiron_workflow_assyst.physics.assyst import run_assyst
 """
 
-try:
-    from .workflow import (
-        run_ASSYST_on_structure,
-        get_ASSYST_deformed_structures,
-        collect_structures,
-    )
-    from .structure_filter_utils import RCORE, is_valid_structure
-except ImportError as e:
-    raise ImportError(
-        f"Error importing pyiron_workflow_assyst: {str(e)}. "
-        "Make sure all dependencies are installed correctly."
-    )
+__version__ = "0.1.0"  # will be replaced by versioneer in Task C15
 
-__version__ = "0.1.0" 
+__all__ = ["__version__"]
+
+
+def __getattr__(name):
+    """PEP 562 lazy loader — keeps build-time imports cheap.
+
+    Without this, versioneer's ``[tool.setuptools.dynamic.version] attr =
+    "pyiron_workflow_assyst.__version__"`` triggers a full package import
+    at build time, cascading through ``from . import structure`` and
+    pulling ``ase`` / ``pymatgen`` into the build-isolation env. See
+    ``pyiron_workflow_atomistics``' historical fix for the same issue.
+    """
+    if name in {"structure", "physics", "analysis", "testing"}:
+        import importlib
+
+        module = importlib.import_module(f".{name}", __name__)
+        globals()[name] = module
+        return module
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
