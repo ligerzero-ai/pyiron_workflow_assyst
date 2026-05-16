@@ -90,7 +90,8 @@ pyiron_workflow_assyst/
 ├── _version.py               # versioneer-managed
 ├── py.typed
 ├── _internal/
-│   └── __init__.py           # private kwargs / engine-fanout plumbing
+│   ├── __init__.py
+│   └── engine_fanout.py      # _build_subengines, _concat — node-side list helpers
 ├── structure/
 │   ├── __init__.py           # re-exports the public structure ops
 │   ├── filters.py            # RCORE, min-dist + core-overlap validators
@@ -292,13 +293,22 @@ def export_training_set(
     ...
 ```
 
-- `pickle_df`: pandas DataFrame with the **same column schema as current
-  code's** `df_ASSYST_jobs.pkl` (`name`, `energy`, `forces`, `stress`,
-  `structure`, plus convergence/metadata cols), saved via `df.to_pickle`.
+- `pickle_df`: pandas DataFrame, **one row per frame**, with scalar columns
+  `name`, `energy`, `volume`, `converged`, and object columns `structure`
+  (`ase.Atoms`), `forces` (`np.ndarray`), `stress` (`np.ndarray` or `None`).
+  Saved via `df.to_pickle`. This is **a new schema**, not a clone of the
+  legacy `df_ASSYST_jobs.pkl` — legacy was one row per VASP job with
+  list-valued trajectory cells (`structures`, `energy`, `scf_convergence` as
+  lists), which is awkward for downstream MLIP training. The cleanup is
+  intentional. See §10 (out of scope) for the legacy-schema rationale.
 - `extxyz`: `ase.io.write(path, atoms_list, format="extxyz")` with
   energy/forces/stress attached — drop-in for MACE / GRACE / Allegro
   training.
 - `ase_db`: `ase.db.connect(path)` SQLite with one row per frame.
+
+The exporter is the **only** place schema choices are made — all upstream
+nodes pass `list[EngineOutput]` around so adding a new export format never
+touches the workflow body.
 
 ### `physics/assyst.py` — top-level macro
 
@@ -449,7 +459,7 @@ sensible value for `CalcInputStatic` (NSW=0 is implicit).
 | `filter_distance_by_species` with `1 − core_overlap_tolerance` rule | `structure_filter_utils.py` | `structure/filters.py` |
 | Static SCF on permutations | `for_node(vasp_job, ...)` | `for_node(calculate, ...)` with `_build_subengines(static_engine, perm_names)` |
 | Combine base+perm DataFrames | `pwf.api.inputs_to_list(2, ...)` + `get_concat_df` | `export_training_set` concatenates `EngineOutput` lists and assembles the DataFrame inside the exporter |
-| Save as pickle `df_ASSYST_jobs.pkl` | `save_df` | `export_training_set(format="pickle_df", path="df_ASSYST_jobs.pkl")` |
+| Save as pickle `df_ASSYST_jobs.pkl` | `save_df` | `export_training_set(format="pickle_df", path="df_ASSYST_jobs.pkl")` — note: schema is intentionally cleaner (one row per frame, scalar cells). See §4 export.py and §10. |
 | `compress` / `compressed_file_in_dir` / `remove_calc_dir` knobs | passed through every `vasp_job` | Engine-level concern. `VaspEngine.compress_outputs` / `.remove_workdir` added in upstream PR #2. |
 | `vasp_command` arg | passed through every `vasp_job` | `VaspEngine.command` (already exists) |
 | `vasp_parser_function` arg | passed through every `vasp_job` | Internal to VaspEngine. Not exposed on the ASSYST macro. |
@@ -469,8 +479,12 @@ sensible value for `CalcInputStatic` (NSW=0 is implicit).
 | `job_basename` | `base_name` | Plays nicer with `engine.with_working_directory(...)` |
 | `train_df_filename` | `training_path` | Generic over output formats |
 
-`pickle_df` output schema matches current code exactly so downstream consumers
-of `df_ASSYST_jobs.pkl` keep working unchanged.
+The default `pickle_df` schema differs from the legacy `df_ASSYST_jobs.pkl`
+schema (one frame per row vs one job per row with list-valued cells) — this
+is a deliberate cleanup, not a regression. Downstream consumers of the legacy
+pickle will need a one-time migration; the VASP-equivalence test in §6
+asserts content equivalence (same (name, energy, structure) triples up to
+ordering), not schema equivalence.
 
 ## 6. Testing strategy
 
@@ -522,9 +536,12 @@ new `run_assyst` on identical inputs (2-atom Fe BCC, same INCAR, same RNG
 seed). Asserts:
 
 - workdir tree has the same `ISIF7/ISIF5/ISIF2/` layout
-- produced pickle has the same row count
-- frame names match
-- energies agree to within `1e-3 eV/atom`
+- both pickles contain the same **set of (name, structure) pairs** — for
+  the new schema this means iterating rows; for the legacy schema it means
+  exploding list-valued cells into per-frame entries first
+- corresponding energies agree to within `1e-3 eV/atom`
+- corresponding forces agree to within `1e-3 eV/Å` per component
+- the row/frame *count* matches after exploding the legacy schema
 
 This is the ground-truth equivalence check. The legacy module is held in a
 test-only `_legacy_assyst/` directory in the repo (frozen snapshot of the
@@ -584,8 +601,10 @@ The work is done when:
    in `__init__.py`, no eager submodule imports at top level).
 3. `pytest tests/unit tests/integration` (the EMT path) passes on CI.
 4. The VASP-equivalence test passes on a machine with VASP available, with
-   the same input → same `df_ASSYST_jobs.pkl` schema and ≤ 1e-3 eV/atom
-   energy drift vs the legacy implementation.
+   the same input → same set of (name, structure) frames and ≤ 1e-3 eV/atom
+   energy drift vs the legacy implementation. (The pickle schema itself is
+   intentionally different — equivalence is content-level, not schema-level
+   — see §6 and §4 export.py.)
 5. The fidelity matrix in §5 is reproduced by the actual code — every row
    of the right column corresponds to real code in the new tree.
 
@@ -600,3 +619,8 @@ The work is done when:
   yet).
 - Backwards-compatibility shims for the old top-level API — this is a clean
   break to `0.2.0a0`.
+- A `pickle_df_legacy` export format reproducing the old one-row-per-job
+  list-valued schema. If a downstream consumer needs it later, add it as an
+  extra `Literal` value on `export_training_set.format` — no other code
+  changes required (the export module is the only place schemas are
+  materialised).
