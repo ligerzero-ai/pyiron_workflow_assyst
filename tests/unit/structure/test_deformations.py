@@ -70,23 +70,17 @@ class TestDistributionMatchesLegacy:
 
     @pytest.fixture(scope="class")
     def legacy(self):
-        """Import the legacy deformations from the snapshot. Skip if import fails."""
         import importlib.util
         import pathlib
-        import sys
 
-        snap = (
+        p = (
             pathlib.Path(__file__).resolve().parents[2]
             / "_legacy_assyst"
-            / "workflow.py"
+            / "deformations_legacy.py"
         )
-        spec = importlib.util.spec_from_file_location("_legacy_assyst_workflow", snap)
+        spec = importlib.util.spec_from_file_location("_legacy_def", p)
         mod = importlib.util.module_from_spec(spec)
-        try:
-            sys.modules["_legacy_assyst_workflow"] = mod
-            spec.loader.exec_module(mod)
-        except Exception as e:
-            pytest.skip(f"Legacy workflow.py could not be imported: {e}")
+        spec.loader.exec_module(mod)
         return mod
 
     def test_rattle_displacement_mean(self, cu, legacy):
@@ -112,9 +106,62 @@ class TestDistributionMatchesLegacy:
             new_norms.append(float(np.linalg.norm(r.get_positions() - base)))
         new_mean = float(np.mean(new_norms))
 
-        # sigma_mean approx stdev_per_norm / sqrt(N). Empirically stdev_per_norm approx 0.18 here,
-        # so sigma_mean approx 0.006. Allow 5sigma for headroom: |mean_diff| < 0.03.
         assert abs(legacy_mean - new_mean) < 0.03, (
             f"legacy mean rattle norm = {legacy_mean:.4f}, "
-            f"new mean = {new_mean:.4f}; diff exceeds 5sigma_mean"
+            f"new mean = {new_mean:.4f}; diff exceeds 5σ_mean"
         )
+
+    def test_triaxial_strain_mean(self, cu, legacy):
+        from pymatgen.io.ase import AseAtomsAdaptor
+
+        pmg = AseAtomsAdaptor.get_structure(cu)
+
+        # Average volume after a 0.05 triaxial strain — strain factor per axis
+        # is U(1-0.05, 1+0.05), so E[V/V0] = E[∏(1+εᵢ)] = 1 (uniform mean 0).
+        np.random.seed(0)
+        legacy_dvol = []
+        v0 = pmg.volume
+        for _ in range(1000):
+            t = legacy.apply_triaxial_strain(pmg, max_strain=0.05)
+            legacy_dvol.append((t.volume - v0) / v0)
+        legacy_mean = float(np.mean(legacy_dvol))
+
+        rng = np.random.default_rng(0)
+        new_dvol = []
+        v0_ase = cu.get_volume()
+        for _ in range(1000):
+            t = apply_triaxial_strain(cu, max_strain=0.05, rng=rng)
+            new_dvol.append((t.get_volume() - v0_ase) / v0_ase)
+        new_mean = float(np.mean(new_dvol))
+
+        # Both should be ~0 (uniform mean); allow ±0.005 (well within 3σ_mean).
+        assert abs(legacy_mean) < 0.005
+        assert abs(new_mean) < 0.005
+        assert abs(legacy_mean - new_mean) < 0.005
+
+    def test_shear_strain_mean(self, cu, legacy):
+        from pymatgen.io.ase import AseAtomsAdaptor
+
+        pmg = AseAtomsAdaptor.get_structure(cu)
+
+        np.random.seed(0)
+        legacy_off = []
+        for _ in range(1000):
+            s = legacy.apply_shear_strain(pmg, max_strain=0.05)
+            # mean of off-diagonal magnitude
+            m = np.asarray(s.lattice.matrix) - np.asarray(pmg.lattice.matrix)
+            legacy_off.append(np.mean(np.abs(m)))
+        legacy_mean = float(np.mean(legacy_off))
+
+        rng = np.random.default_rng(0)
+        new_off = []
+        for _ in range(1000):
+            s = apply_shear_strain(cu, max_strain=0.05, rng=rng)
+            m = s.cell.array - cu.cell.array
+            new_off.append(np.mean(np.abs(m)))
+        new_mean = float(np.mean(new_off))
+
+        # Both should reflect the same uniform half-range distribution.
+        assert (
+            abs(legacy_mean - new_mean) / legacy_mean < 0.10
+        ), f"legacy = {legacy_mean:.5f}, new = {new_mean:.5f}"
