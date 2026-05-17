@@ -4,7 +4,9 @@ import pytest
 
 pyxtal = pytest.importorskip("pyxtal")
 
-from pyiron_workflow_assyst.structure.generate import pyxtal_random_crystals  # noqa: E402
+from pyiron_workflow_assyst.structure.generate import (  # noqa: E402
+    pyxtal_random_crystals,
+)
 
 
 class TestPyXtal:
