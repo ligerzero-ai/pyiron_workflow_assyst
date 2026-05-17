@@ -16,13 +16,11 @@ import pyiron_workflow as pwf
 from ase.calculators.singlepoint import SinglePointCalculator
 from ase.io import write as ase_write
 
-from pyiron_workflow_atomistics.engine import EngineOutput
-
 
 @pwf.as_function_node("path")
 def export_training_set(
-    engine_outputs: list[EngineOutput],
-    names: list[str],
+    engine_outputs: list,
+    names: list,
     *,
     path: str = "df_ASSYST_jobs.pkl",
     format: Literal["pickle_df", "extxyz", "ase_db"] = "pickle_df",
