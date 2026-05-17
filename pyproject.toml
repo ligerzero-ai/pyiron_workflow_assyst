@@ -72,4 +72,7 @@ minversion = "6.0"
 addopts = "-ra -q --cov=pyiron_workflow_assyst"
 testpaths = [
     "tests",
-] 
+]
+markers = [
+    "integration: end-to-end tests using real calculators",
+]
