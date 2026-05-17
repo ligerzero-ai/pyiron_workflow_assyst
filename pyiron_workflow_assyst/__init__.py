@@ -17,7 +17,9 @@ Import the workflows per topic::
     from pyiron_workflow_assyst.physics.assyst import run_assyst
 """
 
-__version__ = "0.1.0"  # will be replaced by versioneer in Task C15
+from . import _version
+
+__version__ = _version.get_versions()["version"]
 
 __all__ = ["__version__"]
 
