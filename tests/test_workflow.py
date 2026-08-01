@@ -28,13 +28,11 @@ def _fake_parser(directory):
     )
 
 
-@pytest.mark.slow
-def test_assyst_graph_runs_end_to_end(tmp_path):
+def _run_graph(tmp_path, **overrides):
     job_name = str((tmp_path / "struct_0").resolve())
     incar = Incar.from_dict({"ENCUT": 300, "ISPIN": 1, "NSW": 5})
 
-    node = pwf.node(run_ASSYST_on_structure)
-    run = node.run(
+    kwargs = dict(
         structure=Structure(Lattice.cubic(2.83), ["Fe"], [[0, 0, 0]]),
         incar=incar,
         potcar_paths=None,
@@ -43,25 +41,64 @@ def test_assyst_graph_runs_end_to_end(tmp_path):
         ionic_steps=5,
         n_stretch_permutations=1,
         n_rattle_permutations=1,
-        # NOT -1 (the production default of "last image only"): pyiron_workflow
-        # 0.19's ForEach/Transform1toN scatter node mis-handles length-1 zipped
-        # inputs (verified with a minimal standalone repro, independent of this
-        # package: a `for a, b in zip(xs, ys)` loop body over length-1 xs/ys
-        # receives `a=(xs[0],)`, `b=(ys[0],)` -- an extra 1-tuple wrapper --
-        # instead of the bare elements, because `atomic_node._store_atomic_outputs`
-        # assigns a single-output atomic's whole return value to its one port
-        # without unpacking, and the scatter node for a length-1 axis has
-        # exactly one output port). `_fake_parser`'s two energies (-8.0, -8.2 eV,
-        # single-atom cell) differ by 0.2 eV/atom, so threshold=0.1 selects BOTH
-        # images and keeps every zipped loop below at length >= 2, sidestepping
-        # the bug while still exercising both for_each fan-outs for real.
-        image_selection_eVatom_threshold=0.1,
         remove_calc_dirs=False,
         compress_dirs=False,
         train_df_filename=str(tmp_path / "df_ASSYST_jobs.pkl"),
         seed=42,
         vasp_parser_function=_fake_parser,
     )
+    kwargs.update(overrides)
+    node = pwf.node(run_ASSYST_on_structure)
+    return node.run(**kwargs)
+
+
+@pytest.mark.slow
+def test_assyst_graph_runs_end_to_end_default_threshold(tmp_path):
+    """Exercises the single-image PRODUCTION path.
+
+    ``image_selection_eVatom_threshold`` is intentionally NOT passed here, so
+    it takes the workflow's own default of -1 ("keep only the final
+    relaxation image"). Every real ASSYST campaign runs with this default, so
+    ``collect_structures`` routinely returns exactly ONE base structure, and
+    both `for`-loops below iterate a length-1 collection.
+
+    This is precisely the configuration that trips ``pyiron_workflow==0.19.0``'s
+    ``ForEach``/``Transform1toN`` bug (see the module docstring of
+    ``pyiron_workflow_assyst.workflow`` and the ``unwrap_singleton`` node): a
+    length-1 zipped loop variable arrives wrapped in a spurious 1-tuple. Without
+    the ``unwrap_singleton`` workaround this test fails with:
+
+        TypeError: join() argument must be str, bytes, or os.PathLike object,
+        not 'tuple'
+
+    A test that instead avoids this configuration (e.g. by always passing a
+    threshold that selects >1 image) would never catch a regression here --
+    see ``test_assyst_graph_runs_end_to_end_multi_image_threshold`` below for
+    the complementary length>=2 case, which is NOT affected by the bug.
+    """
+    run = _run_graph(tmp_path)
+
+    assert run.status == "finished", f"graph failed: {run.exception}"
+    df = run.outputs.train_df
+    assert isinstance(df, pd.DataFrame)
+    assert len(df) > 0
+    assert os.path.exists(tmp_path / "df_ASSYST_jobs.pkl")
+
+
+@pytest.mark.slow
+def test_assyst_graph_runs_end_to_end_multi_image_threshold(tmp_path):
+    """Multi-image path: ``image_selection_eVatom_threshold=0.1``.
+
+    ``_fake_parser``'s two energies (-8.0, -8.2 eV, single-atom cell) differ
+    by 0.2 eV/atom > 0.1, so both images are selected and every zipped loop
+    in the graph has length >= 2 -- the case pyiron_workflow's length-1
+    ``ForEach`` bug does NOT affect. Kept alongside the default-threshold
+    test above specifically because the difference between the two is the
+    bug's exact boundary: both must pass, in both the presence and absence
+    of the ``unwrap_singleton`` workaround for THIS test, while the
+    default-threshold test above must fail without it.
+    """
+    run = _run_graph(tmp_path, image_selection_eVatom_threshold=0.1)
 
     assert run.status == "finished", f"graph failed: {run.exception}"
     df = run.outputs.train_df

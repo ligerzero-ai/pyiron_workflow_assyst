@@ -5,6 +5,26 @@ of those images.
 All work directories are absolute paths derived from ``job_name`` -- nothing
 here calls ``os.chdir``; ``run_shell`` (in ``pyiron_workflow_vasp.generic``)
 scopes each VASP invocation with subprocess's ``cwd`` instead.
+
+KNOWN UPSTREAM BUG (temporary workaround in this file -- see ``unwrap_singleton``):
+``pyiron_workflow==0.19.0``'s ``ForEach``/``Transform1toN`` machinery wraps every
+element of a zipped/nested for-loop iterable in a spurious 1-tuple whenever that
+iterable has length EXACTLY 1 (length 2+ is handled correctly). Symptom, e.g. in
+``join_path``: ``TypeError: join() argument must be str, bytes, or os.PathLike
+object, not 'tuple'``. Minimal reproducer, independent of this package:
+
+    n=1 -> loop body receives {'type': 'tuple', 'value': (0,), 'name': ('n0',)}
+    n=2 -> loop body receives {'type': 'int',   'value': 0,    'name': 'n0'}   (correct)
+
+This matters here because ``image_selection_eVatom_threshold`` defaults to -1
+(keep only the final relaxation image), so ``collect_structures`` routinely
+returns exactly ONE base structure -- the normal production path, not an edge
+case. ``unwrap_singleton`` is applied to every iterated loop variable in both
+for-loops in ``run_ASSYST_on_structure`` as an explicit, visible workaround.
+Delete ``unwrap_singleton`` and its call sites once this is fixed upstream in
+``pyiron_workflow``; re-run ``tests/test_workflow.py::
+test_assyst_graph_runs_end_to_end_default_threshold`` with the workaround
+removed to confirm the fix landed.
 """
 
 import os
@@ -130,6 +150,41 @@ def build_parser_args(directory):
     return {"directory": directory}
 
 
+@fr.atomic("value")
+def unwrap_singleton(value):
+    """Undo pyiron_workflow 0.19.0's length-1 ``ForEach`` scatter bug.
+
+    TEMPORARY WORKAROUND -- see the module docstring for the full writeup.
+    Affected version: ``pyiron_workflow==0.19.0``. Symptom: inside a
+    ``@fr.workflow`` body, a ``for a, b in zip(xs, ys)`` loop's variables
+    arrive wrapped in a spurious 1-tuple whenever the iterated collection has
+    length EXACTLY 1 (length 2+ is unaffected). Root cause:
+    ``pyiron_workflow.transformers.Transform1toN(n=1)`` builds a
+    single-output atomic node whose function returns ``tuple(items)`` (a
+    1-tuple), and ``atomic_node._store_atomic_outputs`` only unpacks a
+    returned tuple across ports when there is MORE than one output port --
+    with exactly one port it assigns the whole 1-tuple to that port instead
+    of unpacking its lone element. Minimal reproducer, independent of this
+    package:
+
+        n=1 -> loop body receives {'type': 'tuple', 'value': (0,), 'name': ('n0',)}
+        n=2 -> loop body receives {'type': 'int',   'value': 0,    'name': 'n0'}   (correct)
+
+    Call this on EVERY iterated loop variable, at the top of the loop body,
+    before it is used for anything else -- do not bury the unwrap inside a
+    downstream node (``join_path``, ``generate_vasp_input``, ...), since a
+    caller reading those should not have to discover this workaround.
+
+    DELETE this function and every call site once the upstream bug is fixed;
+    ``tests/test_workflow.py::test_assyst_graph_runs_end_to_end_default_threshold``
+    is the regression test that exercises the length-1 path this guards, and
+    must keep passing with the workaround removed once the fix lands.
+    """
+    if isinstance(value, tuple) and len(value) == 1:
+        return value[0]
+    return value
+
+
 @fr.atomic("df")
 def concat_and_save(base_results, perm_results, filename):
     frames = [f for f in list(base_results) + list(perm_results) if f is not None]
@@ -208,6 +263,9 @@ def run_ASSYST_on_structure(
 
     base_results = []
     for base_structure, base_name in zip(base_structures, base_names):
+        # Workaround for the length-1 ForEach bug -- see module docstring.
+        base_structure = unwrap_singleton(base_structure)
+        base_name = unwrap_singleton(base_name)
         base_input = generate_vasp_input(base_structure, accurate_incar, potcar_paths)
         base_path = join_path(job_name, base_name)
         base_parser_args = build_parser_args(base_path)
@@ -236,6 +294,9 @@ def run_ASSYST_on_structure(
 
     perm_results = []
     for perm_structure, perm_name in zip(perm_structures, perm_names):
+        # Workaround for the length-1 ForEach bug -- see module docstring.
+        perm_structure = unwrap_singleton(perm_structure)
+        perm_name = unwrap_singleton(perm_name)
         perm_input = generate_vasp_input(perm_structure, accurate_incar, potcar_paths)
         perm_path = join_path(job_name, perm_name)
         perm_parser_args = build_parser_args(perm_path)
