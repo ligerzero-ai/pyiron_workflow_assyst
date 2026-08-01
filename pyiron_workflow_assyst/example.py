@@ -1,8 +1,7 @@
 from ase.build import bulk
-from pymatgen.core import Structure
+import pyiron_workflow as pwf
 from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.io.vasp.inputs import Incar
-from pyiron_workflow_vasp.vasp import VaspInput
 from pyiron_workflow_assyst.workflow import run_ASSYST_on_structure
 
 
@@ -43,18 +42,31 @@ incar = Incar.from_dict({
 })
 incar["MAGMOM"] = "2*3"
 
-vi = VaspInput(bulk_Fe, incar, potcar_paths=["/cmmc/u/hmai/vasp_potentials_54/Fe_sv/POTCAR"])
+# `run_ASSYST_on_structure` is a plain @flowrep.workflow function, not a
+# pyiron_workflow 0.11-style macro: calling it directly (or calling `.run()`
+# on its return value) would execute its body eagerly instead of building a
+# graph. In 0.19 it must be wrapped as a node first, then run with keyword
+# arguments -- see also tests/test_workflow.py, which exercises exactly this
+# pattern end-to-end.
+node = pwf.node(run_ASSYST_on_structure)
+run = node.run(
+    structure=bulk_Fe,
+    incar=incar,
+    potcar_paths=potcar_paths,
+    ionic_steps=100,
+    n_stretch_permutations=2,
+    n_rattle_permutations=2,
+    shear_strain=0.8,
+    triaxial_strain=0.8,
+    rattle_displacement=0.1,
+    rattle_strain=0.05,
+    job_name=structure_folder,
+    vasp_command=vasp_command,
+)
 
-macro_node = run_ASSYST_on_structure(bulk_Fe,
-                        incar,
-                        potcar_paths=potcar_paths,
-                        ionic_steps = 100,
-                        n_stretch_permutations=2,
-                        n_rattle_permutations=2,
-                        shear_strain=0.8,
-                        triaxial_strain=0.8,
-                        rattle_displacement=0.1,
-                        rattle_strain=0.05,
-                        job_name=structure_folder,
-                        vasp_command=vasp_command)
-macro_node.run()
+# `run.outputs.train_df` is the pandas.DataFrame of accurate-statics results
+# (also written to `train_df_filename`, which defaults to a CWD-relative
+# "df_ASSYST_jobs.pkl" -- pass an absolute, job-specific path for concurrent
+# use; see the run_ASSYST_on_structure docstring).
+train_df = run.outputs.train_df
+print(train_df)
