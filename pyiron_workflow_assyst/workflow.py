@@ -24,13 +24,19 @@ depending on the exact length (length 2+ is handled correctly in all cases):
          with a single ``for x in xs: ...; results.append(...)`` loop called
          with ``xs=[]``).
 
+Reported upstream: https://github.com/pyiron/pyiron_workflow/issues/915
+("ForEach: zip loops over length-1 iterables wrap elements in a spurious
+1-tuple (length-0 raises IndexError)"). Check that issue for the fix status
+before touching anything below.
+
 The n=1 case matters here because ``image_selection_eVatom_threshold``
 defaults to -1 (keep only the final relaxation image), so ``collect_structures``
 routinely returns exactly ONE base structure -- the normal production path,
 not an edge case. ``unwrap_singleton`` is applied to every iterated loop
 variable in both for-loops in ``run_ASSYST_on_structure`` as an explicit,
 visible workaround for the n=1 case. Delete ``unwrap_singleton`` and its call
-sites once this is fixed upstream in ``pyiron_workflow``; re-run
+sites once this is fixed upstream in ``pyiron_workflow`` (tracked at the
+issue above); re-run
 ``tests/test_workflow.py::test_assyst_graph_runs_end_to_end_default_threshold``
 and ``::test_assyst_graph_survives_singleton_permutation_loop`` with the
 workaround removed to confirm the fix landed.
@@ -196,6 +202,9 @@ def unwrap_singleton(value):
     """Undo pyiron_workflow 0.19.0's length-1 ``ForEach`` scatter bug.
 
     TEMPORARY WORKAROUND -- see the module docstring for the full writeup.
+    Reported upstream: https://github.com/pyiron/pyiron_workflow/issues/915
+    ("ForEach: zip loops over length-1 iterables wrap elements in a spurious
+    1-tuple (length-0 raises IndexError)").
     Affected version: ``pyiron_workflow==0.19.0``. Symptom: inside a
     ``@fr.workflow`` body, a ``for a, b in zip(xs, ys)`` loop's variables
     arrive wrapped in a spurious 1-tuple whenever the iterated collection has
@@ -216,7 +225,8 @@ def unwrap_singleton(value):
     downstream node (``join_path``, ``generate_vasp_input``, ...), since a
     caller reading those should not have to discover this workaround.
 
-    DELETE this function and every call site once the upstream bug is fixed;
+    DELETE this function and every call site once the upstream bug is fixed
+    (check https://github.com/pyiron/pyiron_workflow/issues/915 for status);
     ``tests/test_workflow.py::test_assyst_graph_runs_end_to_end_default_threshold``
     is the regression test that exercises the length-1 path this guards, and
     must keep passing with the workaround removed once the fix lands.
@@ -271,6 +281,23 @@ def run_ASSYST_on_structure(
     the other's pickle. Pass an absolute, job-specific path explicitly for
     concurrent use; the default is left as-is here for backward compatibility
     with existing callers.
+
+    DELIBERATE SEMANTIC DEVIATION FROM PRIOR CAMPAIGNS -- ``ionic_steps``:
+    this port applies ``ionic_steps`` uniformly to all three relaxation
+    stages (ISIF7, ISIF5, ISIF2); the pre-port implementation applied it only
+    to the ISIF7 stage, and let ISIF5 and ISIF2 run with the raw INCAR's
+    ``NSW`` value unchanged. That difference was material in production:
+    ISIF7 ran at NSW=100 (200 on reconverge) while ISIF5 and ISIF2 ran at
+    NSW=500. Consequently, results from this version are NOT directly
+    comparable to existing datasets for the ISIF5 and ISIF2 stages -- a
+    structure that previously needed more than ``ionic_steps`` iterations to
+    converge its cell shape (ISIF5) or ion positions (ISIF2) will now stop
+    early, and it is that geometry, not a fully converged one, that feeds the
+    subsequent accurate statics. This was reviewed and deliberately accepted
+    by the package owner on 2026-08-01 -- it is not an oversight, and should
+    not be "fixed" back to the old per-stage behavior without a fresh
+    discussion. Convergence rates for the ISIF5 and ISIF2 stages should be
+    checked against the first campaign run under this version.
     """
     relax_incar = set_ionic_steps(incar, ionic_steps)
 
