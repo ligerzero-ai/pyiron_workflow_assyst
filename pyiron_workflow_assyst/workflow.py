@@ -425,6 +425,113 @@ def unwrap_singleton(value):
     return value
 
 
+def _vasp_output_to_dataframe(vasp_output, nelm=None):
+    """Normalize ONE ``vasp_job`` statics result -- whichever parser
+    produced it -- into the bundled legacy parser's per-OUTCAR DataFrame row
+    shape, so ``concat_and_save`` can ``pd.concat`` a heterogeneous list of
+    dict/DataFrame results the same way it always concatenated bundled-
+    parser DataFrames.
+
+    A module-level (not nested) helper on purpose -- see the "NOTE" on
+    ``collect_structures``'s dict-path ``build_atoms`` lambdas for why a
+    nested ``def ... return ...`` inside an ``@fr.atomic`` function breaks
+    import-time output-label scraping; calling out to a plain top-level
+    function avoids that entirely (its own ``return`` statements live in a
+    separate AST subtree that ``concat_and_save``'s recipe never walks).
+
+    - **pandas.DataFrame** (bundled legacy parser): returned unchanged.
+    - **dict** (external vaspparser default parser): one row is built,
+      mirroring the bundled parser's ``structures``/``energy``/
+      ``scf_convergence``/``calc_start_time`` columns. ``structures`` holds
+      one ``Structure.to_json()`` string PER IONIC STEP -- the accurate
+      statics stage runs with ``NSW=0`` so this is normally a single step,
+      but nothing here assumes that -- built the same way
+      ``collect_structures``'s dict path builds its images:
+      ``generic.positions[i]``/``generic.cells[i]`` (cartesian) plus the
+      FINAL structure's ``numbers``/``pbc``. ``scf_convergence`` is derived
+      the same way, and for the same reason, as ``collect_structures``'s
+      ``nelm`` parameter -- see its docstring for the full reasoning
+      (VASP only runs the full NELM electronic steps when it fails to
+      converge, so step i converged iff
+      ``len(scf_energy_free[i]) < nelm``; a missing ``nelm`` warns and
+      falls back to VASP's built-in default rather than silently assuming
+      convergence). ``calc_start_time`` has no dict equivalent (it lives in
+      OUTCAR timestamps the bundled parser reads, not in this parser's
+      output), so it is set to 0 -- harmless, since nothing downstream
+      orders WITHIN a single statics job's one-row frame; only the
+      relaxation-chain rows use it, to pick ``.iloc[-1]``, which does not
+      apply here.
+
+    Raises:
+        TypeError: if ``vasp_output`` is neither a dict nor a
+            ``pandas.DataFrame``.
+    """
+    if isinstance(vasp_output, pd.DataFrame):
+        return vasp_output
+    if not isinstance(vasp_output, dict):
+        raise TypeError(
+            "concat_and_save: unsupported vasp_job result type "
+            f"{type(vasp_output).__name__!r}. Expected either a "
+            "pandas.DataFrame (the bundled parse_vasp_directory legacy "
+            "parser's output) or a dict (the external "
+            "vaspparser.vasp.output.parse_vasp_output default parser's "
+            "output, carrying 'generic'/'structure' keys)."
+        )
+
+    generic = vasp_output["generic"]
+    final_structure = vasp_output["structure"]
+    numbers = np.asarray(final_structure["numbers"])
+    pbc = final_structure.get("pbc", True)
+    positions = np.asarray(generic["positions"])
+    cells = np.asarray(generic["cells"])
+    energies = np.asarray(generic["energy_tot"])
+    n_steps = len(energies)
+
+    structures_json = np.array(
+        [
+            AseAtomsAdaptor.get_structure(
+                AseAtoms(
+                    numbers=numbers, positions=positions[i], cell=cells[i], pbc=pbc
+                )
+            ).to_json()
+            for i in range(n_steps)
+        ]
+    )
+
+    scf_energy_free = generic.get("dft", {}).get("scf_energy_free")
+    if scf_energy_free is None:
+        warnings.warn(
+            "concat_and_save: parsed dict has no generic.dft.scf_energy_free "
+            "-- cannot determine SCF convergence per ionic step. Treating "
+            "every image as converged.",
+            stacklevel=2,
+        )
+        scf = np.array([True] * n_steps)
+    else:
+        if nelm is None:
+            warnings.warn(
+                "concat_and_save: nelm not provided for a dict-shaped "
+                "vasp_job result; assuming VASP's built-in default of "
+                f"{_DEFAULT_NELM}. Pass the ACTUAL NELM used for the "
+                "accurate-statics INCAR for an accurate SCF-convergence "
+                "record.",
+                stacklevel=2,
+            )
+        effective_nelm = _DEFAULT_NELM if nelm is None else nelm
+        scf = np.array([len(steps) < effective_nelm for steps in scf_energy_free])
+
+    return pd.DataFrame(
+        [
+            {
+                "structures": structures_json,
+                "energy": energies,
+                "scf_convergence": scf,
+                "calc_start_time": 0,
+            }
+        ]
+    )
+
+
 @fr.atomic("df")
 def concat_and_save(
     base_results,
@@ -433,6 +540,7 @@ def concat_and_save(
     isif7_converged,
     isif5_converged,
     isif2_converged,
+    nelm=None,
 ):
     """Concatenate every statics result and stamp each row with whether the
     ISIF7/5/2 relaxation chain that produced its geometry actually
@@ -445,8 +553,19 @@ def concat_and_save(
     provenance). Without this, a campaign has no way to tell, after the
     fact, whether the geometry it trained on came from a converged
     relaxation or one truncated by ``ionic_steps``/NSW.
+
+    ``base_results``/``perm_results`` entries are raw ``vasp_job`` outputs
+    -- dict (default parser) or DataFrame (bundled legacy parser) -- and
+    ``nelm`` is forwarded to ``_vasp_output_to_dataframe`` for the dict
+    path's SCF-convergence derivation; see that function's and
+    ``collect_structures``'s docstrings for why. ``run_ASSYST_on_structure``
+    passes the ACTUAL NELM used for the accurate-statics INCAR.
     """
-    frames = [f for f in list(base_results) + list(perm_results) if f is not None]
+    frames = [
+        _vasp_output_to_dataframe(f, nelm=nelm)
+        for f in list(base_results) + list(perm_results)
+        if f is not None
+    ]
     combined = pd.concat(frames, ignore_index=True)
     combined["isif7_converged"] = isif7_converged
     combined["isif5_converged"] = isif5_converged
@@ -570,6 +689,7 @@ def run_ASSYST_on_structure(
         {"KSPACING": 0.25, "EDIFFG": 1e-4, "EDIFF": 1e-5, "LREAL": False, "NSW": 0},
     )
     accurate_incar = strip_isif(accurate_incar)
+    accurate_nelm = extract_nelm(accurate_incar)
 
     base_results = []
     for base_structure, base_name in zip(base_structures, base_names):
@@ -632,6 +752,12 @@ def run_ASSYST_on_structure(
         perm_results.append(perm_out)
 
     train_df = concat_and_save(
-        base_results, perm_results, train_df_filename, conv7, conv5, conv2
+        base_results,
+        perm_results,
+        train_df_filename,
+        conv7,
+        conv5,
+        conv2,
+        nelm=accurate_nelm,
     )
     return train_df
