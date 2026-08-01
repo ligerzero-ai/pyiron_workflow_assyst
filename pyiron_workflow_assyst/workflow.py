@@ -42,12 +42,14 @@ and ``::test_assyst_graph_survives_singleton_permutation_loop`` with the
 workaround removed to confirm the fix landed.
 
 The n=0 case is NOT fixable from this file (there is no element to unwrap --
-the loop body never runs at all), so instead ``collect_structures`` raises a
-clear ``NoConvergedImagesError`` before an empty ``structures``/``names`` pair
-can ever reach a for-loop and produce the opaque ``IndexError`` above. If
-``get_ASSYST_deformed_structures`` (``perturb.py``) ever returns zero
-permutations, the second for-loop is exposed to the very same n=0 upstream
-bug; there is currently no guard for that path.
+the loop body never runs at all), so instead both for-loops are guarded
+against an empty input before they run: ``collect_structures`` raises a clear
+``NoConvergedImagesError`` for the first (base-image) loop, and
+``require_permutations`` raises ``NoPermutationsGeneratedError`` for the
+second (permutation) loop, if ``get_ASSYST_deformed_structures`` returns zero
+permutations (e.g. ``n_rattle_permutations=0, n_stretch_permutations=0``).
+Either turns the opaque ``IndexError`` above into an actionable error instead
+of a graph crash.
 """
 
 import os
@@ -104,6 +106,27 @@ def select_indices_by_threshold(array, threshold):
         selected_indices.append(len(array) - 1)
 
     return selected_indices
+
+
+class NoPermutationsGeneratedError(RuntimeError):
+    """Raised by ``run_ASSYST_on_structure`` when
+    ``get_ASSYST_deformed_structures`` returns zero permutations.
+
+    ``n_rattle_permutations=0, n_stretch_permutations=0`` is a legitimate
+    "relax and statics only, no permutations" configuration in principle
+    (and any combination of permutation counts can also bottom out at zero
+    if every generation attempt fails the validity filter). But an empty
+    ``perm_structures``/``perm_names`` pair would otherwise reach the
+    permutation for-loop below and hit the n=0 sibling of the upstream
+    ``pyiron_workflow==0.19.0`` ``ForEach`` bug documented at the top of
+    this module: an opaque ``IndexError: list index out of range`` with no
+    mention of permutations or which loop. That n=0 case is NOT fixable
+    from this file (there is no element to unwrap -- the loop body never
+    runs at all; see the module docstring and
+    https://github.com/pyiron/pyiron_workflow/issues/915), so until it is
+    fixed upstream, this is raised here instead, with a clear message,
+    turning a silent crash into an actionable one.
+    """
 
 
 class NoConvergedImagesError(RuntimeError):
@@ -175,6 +198,25 @@ def set_ionic_steps(incar, ionic_steps):
     return modified
 
 
+@fr.atomic("incar")
+def strip_isif(incar):
+    """Drop any ``ISIF`` tag left over from the caller's raw INCAR.
+
+    ``generate_modified_incar`` only sets keys, it never removes ones the
+    caller didn't ask to override, so an ``ISIF`` carried in over the raw
+    INCAR (as every real campaign's does -- it drives the ISIF7 stage)
+    would otherwise persist unchanged into the accurate-statics INCAR too.
+    With ``NSW=0`` that ``ISIF`` is inert for VASP itself (there is no ionic
+    relaxation for it to configure), but leaving it in the written INCAR is
+    misleading for provenance: it reads as though the statics job relaxes
+    something. Statics jobs never carry ISIF; this makes that true whether
+    or not the caller's raw INCAR had one.
+    """
+    modified = Incar.from_dict(dict(incar))
+    modified.pop("ISIF", None)
+    return modified
+
+
 @fr.atomic("path")
 def join_path(base, leaf):
     return os.path.join(base, leaf)
@@ -195,6 +237,25 @@ def build_parser_args(directory):
     used, since that branch never reads ``parser_args``.
     """
     return {"directory": directory}
+
+
+@fr.atomic("structures", "names")
+def require_permutations(structures, names):
+    """Guard against an empty permutation set reaching the permutation
+    for-loop -- see ``NoPermutationsGeneratedError``."""
+    if not structures:
+        raise NoPermutationsGeneratedError(
+            "get_ASSYST_deformed_structures produced zero permutations "
+            "(n_rattle_permutations=0 and n_stretch_permutations=0 would "
+            "always do this; a nonzero request can still land here if every "
+            "generation attempt failed the validity filter). The "
+            "permutation for-loop cannot run on an empty list under "
+            "pyiron_workflow's current n=0 ForEach bug (see the module "
+            "docstring); request at least one permutation, or check "
+            "core_overlap_tolerance/min_dist if a nonzero request produced "
+            "this."
+        )
+    return structures, names
 
 
 @fr.atomic("value")
@@ -237,9 +298,31 @@ def unwrap_singleton(value):
 
 
 @fr.atomic("df")
-def concat_and_save(base_results, perm_results, filename):
+def concat_and_save(
+    base_results,
+    perm_results,
+    filename,
+    isif7_converged,
+    isif5_converged,
+    isif2_converged,
+):
+    """Concatenate every statics result and stamp each row with whether the
+    ISIF7/5/2 relaxation chain that produced its geometry actually
+    converged.
+
+    Convergence is a property of the shared relaxation chain, not of any
+    individual statics job, so the same three booleans are broadcast across
+    every row (base images and permutations alike -- permutations are
+    deformations of the base images, so they inherit the same relaxation
+    provenance). Without this, a campaign has no way to tell, after the
+    fact, whether the geometry it trained on came from a converged
+    relaxation or one truncated by ``ionic_steps``/NSW.
+    """
     frames = [f for f in list(base_results) + list(perm_results) if f is not None]
     combined = pd.concat(frames, ignore_index=True)
+    combined["isif7_converged"] = isif7_converged
+    combined["isif5_converged"] = isif5_converged
+    combined["isif2_converged"] = isif2_converged
     combined.to_pickle(filename)
     return combined
 
@@ -336,6 +419,7 @@ def run_ASSYST_on_structure(
         incar,
         {"KSPACING": 0.25, "EDIFFG": 1e-4, "EDIFF": 1e-5, "LREAL": False, "NSW": 0},
     )
+    accurate_incar = strip_isif(accurate_incar)
 
     base_results = []
     for base_structure, base_name in zip(base_structures, base_names):
@@ -367,6 +451,7 @@ def run_ASSYST_on_structure(
         100,
         seed,
     )
+    perm_structures, perm_names = require_permutations(perm_structures, perm_names)
 
     perm_results = []
     for perm_structure, perm_name in zip(perm_structures, perm_names):
@@ -382,5 +467,7 @@ def run_ASSYST_on_structure(
         )
         perm_results.append(perm_out)
 
-    train_df = concat_and_save(base_results, perm_results, train_df_filename)
+    train_df = concat_and_save(
+        base_results, perm_results, train_df_filename, conv7, conv5, conv2
+    )
     return train_df

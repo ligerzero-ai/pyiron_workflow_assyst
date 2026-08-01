@@ -15,6 +15,8 @@ from pyiron_workflow_assyst.structure_filter_utils import (
     resolve_rcore,
 )
 from pyiron_workflow_assyst.workflow import (
+    NoConvergedImagesError,
+    NoPermutationsGeneratedError,
     collect_structures,
     run_ASSYST_on_structure,
     select_indices_by_threshold,
@@ -24,6 +26,8 @@ __version__ = "0.2.0"
 
 __all__ = [
     "RCORE_FALLBACK",
+    "NoConvergedImagesError",
+    "NoPermutationsGeneratedError",
     "apply_rattle",
     "apply_shear_strain",
     "apply_triaxial_strain",

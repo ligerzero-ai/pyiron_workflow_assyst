@@ -7,7 +7,10 @@ import pytest
 from pymatgen.core import Lattice, Structure
 from pymatgen.io.vasp.inputs import Incar, Poscar
 
-from pyiron_workflow_assyst.workflow import run_ASSYST_on_structure
+from pyiron_workflow_assyst.workflow import (
+    NoPermutationsGeneratedError,
+    run_ASSYST_on_structure,
+)
 
 
 def _fake_parser(directory):
@@ -47,14 +50,25 @@ def _run_graph(tmp_path, **overrides):
     the ``Run`` and the absolute job directory the artefacts were written
     under, so callers can read back INCAR/POSCAR files afterwards."""
     job_dir = str((tmp_path / "struct_0").resolve())
-    incar = Incar.from_dict({"ENCUT": 300, "ISPIN": 1, "NSW": 5})
+    # NSW deliberately DIFFERS from ionic_steps below (mirrors production,
+    # where the raw INCAR carried NSW=500 while ionic_steps was 100/200).
+    # If they were equal, `_assert_relax_incar`'s `expected_nsw` check would
+    # pass under both the current uniform-`ionic_steps` semantics AND the
+    # old ISIF7-only semantics this port deliberately replaced -- i.e. it
+    # would not actually be testing which code path ran. ISIF is included
+    # too, so the statics-INCAR assertions exercise the code that strips it
+    # rather than a fixture that never had it to begin with.
+    incar = Incar.from_dict({"ENCUT": 300, "ISPIN": 1, "NSW": 500, "ISIF": 7})
 
     kwargs = dict(
         structure=Structure(Lattice.cubic(_INITIAL_LATTICE_A), ["Fe"], [[0, 0, 0]]),
         incar=incar,
         potcar_paths=None,
         job_name=job_dir,
-        vasp_command="echo 'reached required accuracy' > vasp.log",
+        vasp_command=(
+            "echo 'reached required accuracy - stopping structural energy "
+            "minimisation' > vasp.log"
+        ),
         ionic_steps=5,
         n_stretch_permutations=1,
         n_rattle_permutations=1,
@@ -97,6 +111,47 @@ def _assert_static_incar(directory):
     assert incar["LREAL"] is False, f"{directory}: wrong LREAL"
     assert incar["NSW"] == 0, f"{directory}: static job must not relax ions"
     assert "ISIF" not in incar, f"{directory}: static job must not carry ISIF"
+
+
+def _assert_base_static_structure(directory):
+    """The base statics job's POSCAR must be the fed-forward RELAXED
+    geometry (ISIF2's parsed output, a=2.9 under `_fake_parser`) -- not the
+    workflow's raw unrelaxed input (a=2.83). Getting this wrong means the
+    energy/force labels in `train_df` would describe the input cell while
+    being recorded as belonging to the relaxed one -- silently corrupting
+    the training data with no crash to flag it.
+    """
+    a = _read_poscar_lattice_a(directory)
+    assert a == pytest.approx(_FED_FORWARD_LATTICE_A), (
+        f"{directory}: base statics structure must be the fed-forward "
+        f"relaxed lattice (a={_FED_FORWARD_LATTICE_A}), got a={a} -- "
+        f"statics may be running on the unrelaxed input instead"
+    )
+
+
+def _assert_perm_static_structure(directory):
+    """A permutation statics job's POSCAR must be a genuine deformation of
+    the base image: neither the workflow's raw unrelaxed input (a=2.83,
+    which is what it would be if the permutation loop fed `structure`
+    instead of its own `perm_structure`) nor an exact copy of the base
+    image's own lattice (which would mean no deformation was applied at
+    all). Checking only "differs from the raw input" would miss a bug that
+    swaps in the base structure unperturbed; checking only "differs from
+    base" would miss a bug that swaps in the raw input (a=2.83 != a=2.9
+    happens to differ from the base too) -- both checks are needed to pin
+    down which structure is actually feeding these jobs.
+    """
+    a = _read_poscar_lattice_a(directory)
+    assert a != pytest.approx(_INITIAL_LATTICE_A), (
+        f"{directory}: permutation statics structure equals the workflow's "
+        f"raw unrelaxed input (a={_INITIAL_LATTICE_A}) -- permutations may "
+        f"not be feeding their own deformed structure"
+    )
+    assert a != pytest.approx(_FED_FORWARD_LATTICE_A), (
+        f"{directory}: permutation statics structure is an exact copy of "
+        f"the base image (a={_FED_FORWARD_LATTICE_A}) -- no deformation "
+        f"appears to have been applied"
+    )
 
 
 def _assert_isif_chain(job_dir, ionic_steps):
@@ -188,10 +243,25 @@ def test_assyst_graph_runs_end_to_end_default_threshold(tmp_path):
     assert len(df) == 4
     assert sorted(df["job_name"].tolist()) == expected_job_names
 
+    # Relaxation convergence must be surfaced on every row, not silently
+    # discarded: `vasp_command` here writes VASP's own "reached required
+    # accuracy" convergence line, so all three relaxation stages converge
+    # and every row must carry True for all three flags.
+    for col in ("isif7_converged", "isif5_converged", "isif2_converged"):
+        assert col in df.columns, f"train_df missing convergence column {col!r}"
+        assert df[col].tolist() == [True] * len(df), (
+            f"{col}: expected every row True (the fake relaxations all "
+            f"'converge'), got {df[col].tolist()}"
+        )
+
     # Physics guards, read back from the actual written INCARs/POSCARs.
     _assert_isif_chain(job_dir, ionic_steps=5)
     for name in expected_job_names:
         _assert_static_incar(os.path.join(job_dir, name))
+        if name == _BASE_IMAGE_NAME:
+            _assert_base_static_structure(os.path.join(job_dir, name))
+        else:
+            _assert_perm_static_structure(os.path.join(job_dir, name))
 
 
 @pytest.mark.slow
@@ -244,6 +314,22 @@ def test_assyst_graph_survives_singleton_permutation_loop(tmp_path):
     assert sorted(df["job_name"].tolist()) == expected_job_names
 
 
+@pytest.mark.slow
+def test_zero_permutations_raises_a_clear_error(tmp_path):
+    """``n_rattle_permutations=0, n_stretch_permutations=0`` is a plausible
+    "relax and statics only, no permutations" CLI configuration -- but it
+    makes ``get_ASSYST_deformed_structures`` return empty ``perm_structures``/
+    ``perm_names`` lists, which would otherwise reach the permutation
+    for-loop and hit pyiron_workflow's n=0 ``ForEach`` bug (see the module
+    docstring): a bare ``IndexError: list index out of range`` with no
+    mention of permutations. ``require_permutations`` guards against that,
+    symmetrically with ``collect_structures``'s ``NoConvergedImagesError``,
+    and must raise a clear, named, actionable error instead.
+    """
+    with pytest.raises(NoPermutationsGeneratedError):
+        _run_graph(tmp_path, n_rattle_permutations=0, n_stretch_permutations=0)
+
+
 def test_assyst_graph_has_the_expected_isif_chain():
     """Three relaxation-stage `vasp_job`s and two accurate-statics fan-outs
     (base images, permutations) must all be present as distinct children.
@@ -257,7 +343,7 @@ def test_assyst_graph_has_the_expected_isif_chain():
     """
     node = pwf.node(run_ASSYST_on_structure)
     labels = list(node.nodes.keys())
-    assert sum("vasp_job" in label for label in labels) >= 3
+    assert sum("vasp_job" in label for label in labels) == 3
     for_each_labels = [label for label in labels if "for_each" in label]
     assert len(for_each_labels) == 2, (
         f"expected exactly 2 for_each fan-outs (base images, permutations), "
