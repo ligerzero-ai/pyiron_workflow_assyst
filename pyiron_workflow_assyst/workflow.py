@@ -53,9 +53,12 @@ of a graph crash.
 """
 
 import os
+import warnings
 
+import numpy as np
 import pandas as pd
 import flowrep as fr
+from ase import Atoms as AseAtoms
 from pymatgen.core import Structure
 from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.io.vasp.inputs import Incar
@@ -143,25 +146,136 @@ class NoConvergedImagesError(RuntimeError):
     """
 
 
+_DEFAULT_NELM = 60  # VASP's own built-in default when an INCAR omits NELM.
+
+
 @fr.atomic("structures", "names", "energies")
-def collect_structures(vasp_output, job_name, image_selection_eVatom_threshold=-1):
+def collect_structures(
+    vasp_output, job_name, image_selection_eVatom_threshold=-1, nelm=None
+):
     """Select relaxation images from a parsed VASP directory.
 
-    Takes the MOST RECENT row (``.iloc[-1]``): parse_vasp_directory returns one
-    row per OUTCAR plus one per custodian error archive, ascending by start
-    time, so the first row is the oldest - the crashed run in a restart chain.
+    ``vasp_output`` is whatever ``parse_vasp_output``/``vasp_job`` produced,
+    and TWO shapes are supported:
+
+    - **dict** (the DEFAULT parser -- the external
+      ``vaspparser.vasp.output.parse_vasp_output``): one ``ase.Atoms`` is
+      built per ionic step from ``generic.positions[i]``/``generic.cells[i]``
+      (cartesian) plus the FINAL structure's ``structure.numbers``/``pbc``
+      (atomic species and periodicity don't change during a relaxation, so
+      the same arrays apply to every step); energies come from
+      ``generic.energy_tot``. This dict does not carry an explicit
+      per-step converged flag -- see ``nelm`` below for how it is derived.
+    - **pandas.DataFrame** (the BUNDLED legacy parser, see
+      ``vasp_parser/output.py``, ``parse_vasp_directory``): one row per
+      OUTCAR plus one per custodian error archive, ascending by start time,
+      so ``.iloc[-1]`` -- the MOST RECENT row -- is taken, not ``.iloc[0]``
+      (the oldest/crashed one, in a restart chain). Its ``structures``
+      column holds, per row, an array of ``Structure.to_json()`` strings,
+      one per ionic step -- coerced through ``str(...)`` before
+      ``Structure.from_str`` because indexing the array back out yields
+      ``numpy.str_``, which pymatgen's orjson reader rejects even though it
+      is a ``str`` subclass (same issue documented in
+      ``pyiron_workflow_vasp.construct_sequential_vasp_input``). ``energy``
+      and ``scf_convergence`` columns carry per-step energies and an
+      explicit converged flag directly.
 
     ``image_selection_eVatom_threshold=-1`` keeps only the final image.
     Images whose SCF did not converge are dropped; if that leaves nothing,
     raises ``NoConvergedImagesError`` (see its docstring for why).
-    """
-    row = vasp_output.iloc[-1]
-    json_blobs = row["structures"]
-    energies = list(row["energy"])
-    scf = list(row["scf_convergence"])
 
-    first = Structure.from_str(str(json_blobs[0]), fmt="json")
-    n_atoms = len(first)
+    ``nelm``: SCF-convergence signal for the DICT path only (ignored for the
+    DataFrame path, which has its own explicit ``scf_convergence`` column).
+    The external parser's dict carries no converged flag, so it must be
+    derived: VASP stops the electronic loop early on convergence and only
+    runs the full NELM electronic steps when it fails to converge, so ionic
+    step i converged iff ``len(generic.dft.scf_energy_free[i]) < nelm``.
+    NELM itself lives in the INCAR, not in the parser's output dict, so it
+    cannot be recovered from ``vasp_output`` alone -- callers should pass
+    the ACTUAL NELM used for this job (e.g. ``incar.get("NELM")``, as
+    ``run_ASSYST_on_structure`` does, reading it off the very INCAR that
+    produced this output -- not by re-reading the run directory, which may
+    already be compressed/deleted by the time this runs). If left as
+    ``None``, a warning is raised and VASP's own built-in default (60) is
+    assumed instead: dropping unconverged images is a real filter that
+    protects training-data quality, so this never silently treats
+    everything as converged with no signal -- but an assumed NELM can still
+    be wrong for a job whose INCAR set NELM to something else, hence the
+    warning rather than a silent guess.
+
+    Raises:
+        TypeError: if ``vasp_output`` is neither a dict nor a
+            ``pandas.DataFrame``.
+    """
+    if isinstance(vasp_output, pd.DataFrame):
+        row = vasp_output.iloc[-1]
+        json_blobs = row["structures"]
+        energies = list(row["energy"])
+        scf = list(row["scf_convergence"])
+        n_atoms = len(Structure.from_str(str(json_blobs[0]), fmt="json"))
+
+        # NOTE: this is a lambda, not a `def ... return ...`, on purpose --
+        # flowrep's @fr.atomic AST-walks EVERY `return` statement in this
+        # function's body (including inside nested `def`s) to cross-check
+        # explicit output labels against scraped ones, so a nested `def`
+        # with its own `return` here would break `collect_structures` at
+        # IMPORT time with "All return statements must have the same number
+        # of elements", unrelated to anything this closure actually does.
+        build_atoms = lambda i: AseAtomsAdaptor.get_atoms(
+            Structure.from_str(str(json_blobs[i]), fmt="json")
+        )
+
+    elif isinstance(vasp_output, dict):
+        generic = vasp_output["generic"]
+        final_structure = vasp_output["structure"]
+        numbers = np.asarray(final_structure["numbers"])
+        pbc = final_structure.get("pbc", True)
+        positions = np.asarray(generic["positions"])
+        cells = np.asarray(generic["cells"])
+        energies = list(np.asarray(generic["energy_tot"]))
+        n_atoms = len(numbers)
+
+        scf_energy_free = generic.get("dft", {}).get("scf_energy_free")
+        if scf_energy_free is None:
+            warnings.warn(
+                f"collect_structures({job_name!r}): parsed dict has no "
+                "generic.dft.scf_energy_free -- cannot determine SCF "
+                "convergence per ionic step. Treating every image as "
+                "converged.",
+                stacklevel=2,
+            )
+            scf = [True] * len(energies)
+        else:
+            if nelm is None:
+                warnings.warn(
+                    f"collect_structures({job_name!r}): nelm not provided "
+                    "for the dict-shaped vasp_output; assuming VASP's "
+                    f"built-in default of {_DEFAULT_NELM}. The parser's "
+                    "output does not carry NELM (it lives in the INCAR, "
+                    "not the parsed output) -- pass the ACTUAL NELM used "
+                    "for this job (e.g. incar.get('NELM')) for an accurate "
+                    "SCF-convergence filter.",
+                    stacklevel=2,
+                )
+            effective_nelm = _DEFAULT_NELM if nelm is None else nelm
+            scf = [len(steps) < effective_nelm for steps in scf_energy_free]
+
+        # See the DataFrame branch above for why this is a lambda.
+        build_atoms = lambda i: AseAtoms(
+            numbers=numbers, positions=positions[i], cell=cells[i], pbc=pbc
+        )
+
+    else:
+        raise TypeError(
+            "collect_structures: unsupported vasp_output type "
+            f"{type(vasp_output).__name__!r}. Expected either a "
+            "pandas.DataFrame (the bundled parse_vasp_directory legacy "
+            "parser's output, carrying 'structures'/'energy'/"
+            "'scf_convergence' columns) or a dict (the external "
+            "vaspparser.vasp.output.parse_vasp_output default parser's "
+            "output, carrying 'generic'/'structure' keys)."
+        )
+
     ev_atom = [e / n_atoms for e in energies]
 
     if image_selection_eVatom_threshold == -1:
@@ -175,8 +289,7 @@ def collect_structures(vasp_output, job_name, image_selection_eVatom_threshold=-
     for i in selected:
         if not scf[i]:
             continue
-        structure = Structure.from_str(str(json_blobs[i]), fmt="json")
-        structures.append(AseAtomsAdaptor.get_atoms(structure))
+        structures.append(build_atoms(i))
         names.append(f"{job_name}_accur_relaxstep{i}")
         kept_energies.append(energies[i])
 
@@ -237,6 +350,21 @@ def build_parser_args(directory):
     used, since that branch never reads ``parser_args``.
     """
     return {"directory": directory}
+
+
+@fr.atomic("nelm")
+def extract_nelm(incar):
+    """Read ``NELM`` off an ``Incar`` for ``collect_structures``'s
+    dict-path SCF-convergence derivation (see its docstring).
+
+    A ``@fr.workflow`` body cannot spell ``incar.get("NELM")`` inline (node
+    calls may only take symbolic input or literal constants, not arbitrary
+    method calls -- same constraint as ``build_parser_args`` above), hence
+    this one-line node. Returns ``None`` if the INCAR doesn't set ``NELM``,
+    which ``collect_structures`` then treats as "unknown" (warns and falls
+    back to VASP's built-in default) rather than as an error.
+    """
+    return incar.get("NELM")
 
 
 @fr.atomic("structures", "names")
@@ -389,8 +517,15 @@ def run_ASSYST_on_structure(
     path7 = join_path(job_name, "ISIF7")
     parser_args7 = build_parser_args(path7)
     out7, conv7 = vasp_job(
-        path7, input7, vasp_command, None, compress_dirs,
-        compressed_file_in_dir, remove_calc_dirs, vasp_parser_function, parser_args7,
+        path7,
+        input7,
+        vasp_command,
+        None,
+        compress_dirs,
+        compressed_file_in_dir,
+        remove_calc_dirs,
+        vasp_parser_function,
+        parser_args7,
     )
 
     incar5 = generate_modified_incar(relax_incar, {"ISIF": 5})
@@ -398,8 +533,15 @@ def run_ASSYST_on_structure(
     path5 = join_path(job_name, "ISIF5")
     parser_args5 = build_parser_args(path5)
     out5, conv5 = vasp_job(
-        path5, input5, vasp_command, None, compress_dirs,
-        compressed_file_in_dir, remove_calc_dirs, vasp_parser_function, parser_args5,
+        path5,
+        input5,
+        vasp_command,
+        None,
+        compress_dirs,
+        compressed_file_in_dir,
+        remove_calc_dirs,
+        vasp_parser_function,
+        parser_args5,
     )
 
     incar2 = generate_modified_incar(relax_incar, {"ISIF": 2})
@@ -407,12 +549,20 @@ def run_ASSYST_on_structure(
     path2 = join_path(job_name, "ISIF2")
     parser_args2 = build_parser_args(path2)
     out2, conv2 = vasp_job(
-        path2, input2, vasp_command, None, compress_dirs,
-        compressed_file_in_dir, remove_calc_dirs, vasp_parser_function, parser_args2,
+        path2,
+        input2,
+        vasp_command,
+        None,
+        compress_dirs,
+        compressed_file_in_dir,
+        remove_calc_dirs,
+        vasp_parser_function,
+        parser_args2,
     )
 
+    isif2_nelm = extract_nelm(incar2)
     base_structures, base_names, base_energies = collect_structures(
-        out2, "ISIF2", image_selection_eVatom_threshold
+        out2, "ISIF2", image_selection_eVatom_threshold, nelm=isif2_nelm
     )
 
     accurate_incar = generate_modified_incar(
@@ -430,8 +580,15 @@ def run_ASSYST_on_structure(
         base_path = join_path(job_name, base_name)
         base_parser_args = build_parser_args(base_path)
         base_out, base_conv = vasp_job(
-            base_path, base_input, vasp_command, None, compress_dirs,
-            compressed_file_in_dir, remove_calc_dirs, vasp_parser_function, base_parser_args,
+            base_path,
+            base_input,
+            vasp_command,
+            None,
+            compress_dirs,
+            compressed_file_in_dir,
+            remove_calc_dirs,
+            vasp_parser_function,
+            base_parser_args,
         )
         base_results.append(base_out)
 
@@ -462,8 +619,15 @@ def run_ASSYST_on_structure(
         perm_path = join_path(job_name, perm_name)
         perm_parser_args = build_parser_args(perm_path)
         perm_out, perm_conv = vasp_job(
-            perm_path, perm_input, vasp_command, None, compress_dirs,
-            compressed_file_in_dir, remove_calc_dirs, vasp_parser_function, perm_parser_args,
+            perm_path,
+            perm_input,
+            vasp_command,
+            None,
+            compress_dirs,
+            compressed_file_in_dir,
+            remove_calc_dirs,
+            vasp_parser_function,
+            perm_parser_args,
         )
         perm_results.append(perm_out)
 
