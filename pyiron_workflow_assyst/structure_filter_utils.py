@@ -128,6 +128,22 @@ def rcore_from_potcar(potcar_path: str) -> dict[str, float]:
     }
 
 
+def _rcore_fallback_or_raise(symbol: str) -> float:
+    """``RCORE_FALLBACK[symbol]``, or a clear error naming the element if it
+    has neither a resolved POTCAR reading nor a fallback table entry (e.g.
+    ``Ce``, which is off-table). Without this, a missing key surfaces as a
+    bare, confusing ``KeyError: 'Ce'`` chained from inside an ``except``
+    block that is already handling an unrelated POTCAR-resolution failure.
+    """
+    try:
+        return RCORE_FALLBACK[symbol]
+    except KeyError:
+        raise KeyError(
+            f"No RCORE available for element {symbol!r}: it could not be "
+            f"read from a POTCAR and has no RCORE_FALLBACK table entry."
+        ) from None
+
+
 def resolve_rcore(structure, potcar_paths=None) -> dict[str, float]:
     """Core radii for every element in ``structure``, from the POTCARs in use.
 
@@ -137,7 +153,8 @@ def resolve_rcore(structure, potcar_paths=None) -> dict[str, float]:
     either variant is wrong for the other. When ``potcar_paths`` is given
     (mirroring a VASP run's explicit override), those are read instead of
     the default selection. If a POTCAR cannot be read, falls back to
-    ``RCORE_FALLBACK`` (with a warning) for the affected element(s).
+    ``RCORE_FALLBACK`` (with a warning) for the affected element(s) only -
+    elements that *were* read successfully keep their genuine value.
     """
     symbols = sorted({site.specie.symbol for site in structure})
 
@@ -152,14 +169,16 @@ def resolve_rcore(structure, potcar_paths=None) -> dict[str, float]:
                     f"falling back to the built-in table.",
                     stacklevel=2,
                 )
-        if all(sym in merged for sym in symbols):
-            return {sym: merged[sym] for sym in symbols}
         missing = [s for s in symbols if s not in merged]
-        warnings.warn(
-            f"No POTCAR RCORE for {missing}; falling back to the built-in table.",
-            stacklevel=2,
-        )
-        return {sym: merged.get(sym, RCORE_FALLBACK[sym]) for sym in symbols}
+        if missing:
+            warnings.warn(
+                f"No POTCAR RCORE for {missing}; falling back to the built-in table.",
+                stacklevel=2,
+            )
+        return {
+            sym: merged[sym] if sym in merged else _rcore_fallback_or_raise(sym)
+            for sym in symbols
+        }
 
     try:
         from ase import Atoms
@@ -177,17 +196,42 @@ def resolve_rcore(structure, potcar_paths=None) -> dict[str, float]:
         paths = get_default_POTCAR_paths(
             atoms, default_POTCAR_library_path, default_functional
         )
-        merged = {}
-        for path in paths:
-            merged.update(rcore_from_potcar(path))
-        return {sym: merged[sym] for sym in symbols}
     except Exception as exc:
+        # Resolving *which* POTCARs to read failed entirely (missing
+        # pyiron_workflow_vasp, misconfigured POTCAR library, unknown
+        # element, ...) - every element falls back.
         warnings.warn(
-            f"Could not resolve default POTCARs ({exc}); "
-            f"falling back to the built-in RCORE table.",
+            f"Could not resolve default POTCAR paths ({exc}); "
+            f"falling back to the built-in RCORE table for all elements.",
             stacklevel=2,
         )
-        return {sym: RCORE_FALLBACK[sym] for sym in symbols}
+        return {sym: _rcore_fallback_or_raise(sym) for sym in symbols}
+
+    merged = {}
+    for path in paths:
+        try:
+            merged.update(rcore_from_potcar(path))
+        except (OSError, ValueError) as exc:
+            # A single unreadable/unparseable POTCAR must not poison every
+            # other element that resolved fine - only the elements it would
+            # have covered fall back (via the `missing` handling below).
+            warnings.warn(
+                f"Could not read RCORE from default POTCAR {path!r} ({exc}); "
+                f"the affected element(s) will fall back to the built-in table.",
+                stacklevel=2,
+            )
+
+    missing = [sym for sym in symbols if sym not in merged]
+    if missing:
+        warnings.warn(
+            f"No default-POTCAR RCORE resolved for {missing}; "
+            f"falling back to the built-in table for just these element(s).",
+            stacklevel=2,
+        )
+    return {
+        sym: merged[sym] if sym in merged else _rcore_fallback_or_raise(sym)
+        for sym in symbols
+    }
 
 
 def _element_wise_dist(structure):

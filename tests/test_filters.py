@@ -70,6 +70,35 @@ def test_resolve_rcore_falls_back_and_warns_on_unreadable_potcar():
     assert any("POTCAR" in str(w.message) for w in caught), "must warn on fallback"
 
 
+def test_resolve_rcore_default_path_reads_potcar_without_warning(fe_structure):
+    """RCORE_FALLBACK is, by construction, identical to the default-POTCAR
+    values (that is the whole point of Task 2), so a value-only comparison
+    cannot tell a genuine POTCAR read apart from a silent fallback. Catch
+    that directly: the default (no potcar_paths) branch must not warn at all
+    for an ordinary element with an installed default POTCAR.
+    """
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        resolve_rcore(fe_structure)
+    assert caught == [], f"unexpected warnings: {[str(w.message) for w in caught]}"
+
+
+def test_resolve_rcore_default_path_reads_potcar_for_element_absent_from_fallback():
+    """Ce has no entry in RCORE_FALLBACK - confirmed below - so only a
+    genuine POTCAR read can produce a value for it here; the fallback path
+    would raise (via `_rcore_fallback_or_raise`) instead of quietly serving
+    a wrong number. This is a stronger proof of a real read than any
+    value-matching assertion could be, for exactly the element the table
+    cannot cover.
+    """
+    from pymatgen.core import Lattice, Structure
+
+    assert "Ce" not in RCORE_FALLBACK
+    ce = Structure(Lattice.cubic(5.0), ["Ce"], [[0.0, 0.0, 0.0]])
+    rc = resolve_rcore(ce)
+    assert rc["Ce"] == pytest.approx(2.700 * BOHR, abs=1e-4)
+
+
 def test_mic_backend_overestimates_distance_in_sheared_cell(sheared_cell):
     """Documents the bug the default backend exists to avoid.
 
@@ -179,6 +208,18 @@ def test_backends_agree_on_an_undistorted_cell(two_species_structure):
         get_minimum_distance(two_species_structure, backend="neighbor_list"),
         rel=1e-6,
     )
+
+
+def test_get_minimum_distance_default_backend_is_neighbor_list(sheared_cell):
+    """get_minimum_distance is public - a bare call with no `backend=` kwarg
+    (e.g. from a notebook or analysis script) must use the correct
+    neighbor_list search, not silently regress to the lying 'mic' default.
+    Every other test in this module passes `backend=` explicitly, so none of
+    them would catch a mutated signature default; this one calls it bare on
+    `sheared_cell`, where the two backends are known to disagree (mic=1.4824,
+    true=0.9000), to pin the default itself.
+    """
+    assert get_minimum_distance(sheared_cell) == pytest.approx(0.9, abs=1e-3)
 
 
 def test_unknown_backend_raises():
