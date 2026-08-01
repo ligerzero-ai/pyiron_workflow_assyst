@@ -162,13 +162,24 @@ def resolve_rcore(structure, potcar_paths=None) -> dict[str, float]:
         merged: dict[str, float] = {}
         for path in potcar_paths:
             try:
-                merged.update(rcore_from_potcar(path))
+                resolved = rcore_from_potcar(path)
             except (OSError, ValueError) as exc:
                 warnings.warn(
                     f"Could not read RCORE from POTCAR {path!r} ({exc}); "
                     f"falling back to the built-in table.",
                     stacklevel=2,
                 )
+                continue
+            for sym, radius in resolved.items():
+                if sym in merged and merged[sym] != radius:
+                    warnings.warn(
+                        f"Element {sym!r} appears in more than one entry of "
+                        f"potcar_paths with conflicting RCORE values "
+                        f"({merged[sym]} vs {radius} Angstrom, the latter "
+                        f"from {path!r}); the later path wins.",
+                        stacklevel=2,
+                    )
+                merged[sym] = radius
         missing = [s for s in symbols if s not in merged]
         if missing:
             warnings.warn(

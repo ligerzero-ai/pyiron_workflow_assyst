@@ -59,6 +59,31 @@ def test_resolve_rcore_honours_explicit_potcar_paths():
     assert rc["Ti"] > resolve_rcore(ti)["Ti"], "plain must exceed semicore"
 
 
+def test_resolve_rcore_warns_on_conflicting_potcar_paths_and_last_wins():
+    """Ti and Ti_sv both key as bare 'Ti' (see
+    test_rcore_from_potcar_maps_sv_variant_to_bare_element) but carry
+    different RCORE values. Passing both in potcar_paths must warn about the
+    conflict rather than silently picking whichever happened to be read
+    last -- and the resolved value must still be well-defined (the later
+    path's), not some ambiguous merge.
+    """
+    from pymatgen.core import Lattice, Structure
+
+    plain_ti = (
+        "/cmmc/u/hmai/pyiron-resources-cmmc/vasp/potentials/"
+        "pyiron_nodes/potpaw_64/GGA/Ti/POTCAR"
+    )
+    ti = Structure(Lattice.cubic(3.3), ["Ti"], [[0.0, 0.0, 0.0]])
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        rc = resolve_rcore(ti, potcar_paths=[TI_SV_POTCAR, plain_ti])
+    assert rc["Ti"] == pytest.approx(2.800 * BOHR, abs=1e-3), "later path must win"
+    assert any(
+        "conflicting" in str(w.message) and "Ti" in str(w.message) for w in caught
+    ), f"must warn on the RCORE conflict, got: {[str(w.message) for w in caught]}"
+
+
 def test_resolve_rcore_falls_back_and_warns_on_unreadable_potcar():
     from pymatgen.core import Lattice, Structure
 
