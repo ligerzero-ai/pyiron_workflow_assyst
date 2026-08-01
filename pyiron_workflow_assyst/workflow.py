@@ -7,24 +7,41 @@ here calls ``os.chdir``; ``run_shell`` (in ``pyiron_workflow_vasp.generic``)
 scopes each VASP invocation with subprocess's ``cwd`` instead.
 
 KNOWN UPSTREAM BUG (temporary workaround in this file -- see ``unwrap_singleton``):
-``pyiron_workflow==0.19.0``'s ``ForEach``/``Transform1toN`` machinery wraps every
-element of a zipped/nested for-loop iterable in a spurious 1-tuple whenever that
-iterable has length EXACTLY 1 (length 2+ is handled correctly). Symptom, e.g. in
-``join_path``: ``TypeError: join() argument must be str, bytes, or os.PathLike
-object, not 'tuple'``. Minimal reproducer, independent of this package:
+``pyiron_workflow==0.19.0``'s ``ForEach``/``Transform1toN`` machinery mishandles
+zipped/nested for-loop iterables whose length is SMALL, in two distinct ways
+depending on the exact length (length 2+ is handled correctly in all cases):
 
-    n=1 -> loop body receives {'type': 'tuple', 'value': (0,), 'name': ('n0',)}
-    n=2 -> loop body receives {'type': 'int',   'value': 0,    'name': 'n0'}   (correct)
+  n=1 -> loop body receives {'type': 'tuple', 'value': (0,), 'name': ('n0',)}
+         (elements silently wrapped in a spurious 1-tuple). Symptom, e.g. in
+         ``join_path``: ``TypeError: join() argument must be str, bytes, or
+         os.PathLike object, not 'tuple'``.
+  n=2 -> loop body receives {'type': 'int',   'value': 0,    'name': 'n0'}
+         (correct)
+  n=0 -> the for-node scatter machinery raises ``IndexError: list index out
+         of range`` deep inside flowrep/pyiron_workflow internals, with no
+         mention of which loop, which port, or why -- confirmed with a
+         minimal reproducer independent of this package (an ``@fr.workflow``
+         with a single ``for x in xs: ...; results.append(...)`` loop called
+         with ``xs=[]``).
 
-This matters here because ``image_selection_eVatom_threshold`` defaults to -1
-(keep only the final relaxation image), so ``collect_structures`` routinely
-returns exactly ONE base structure -- the normal production path, not an edge
-case. ``unwrap_singleton`` is applied to every iterated loop variable in both
-for-loops in ``run_ASSYST_on_structure`` as an explicit, visible workaround.
-Delete ``unwrap_singleton`` and its call sites once this is fixed upstream in
-``pyiron_workflow``; re-run ``tests/test_workflow.py::
-test_assyst_graph_runs_end_to_end_default_threshold`` with the workaround
-removed to confirm the fix landed.
+The n=1 case matters here because ``image_selection_eVatom_threshold``
+defaults to -1 (keep only the final relaxation image), so ``collect_structures``
+routinely returns exactly ONE base structure -- the normal production path,
+not an edge case. ``unwrap_singleton`` is applied to every iterated loop
+variable in both for-loops in ``run_ASSYST_on_structure`` as an explicit,
+visible workaround for the n=1 case. Delete ``unwrap_singleton`` and its call
+sites once this is fixed upstream in ``pyiron_workflow``; re-run
+``tests/test_workflow.py::test_assyst_graph_runs_end_to_end_default_threshold``
+and ``::test_assyst_graph_survives_singleton_permutation_loop`` with the
+workaround removed to confirm the fix landed.
+
+The n=0 case is NOT fixable from this file (there is no element to unwrap --
+the loop body never runs at all), so instead ``collect_structures`` raises a
+clear ``NoConvergedImagesError`` before an empty ``structures``/``names`` pair
+can ever reach a for-loop and produce the opaque ``IndexError`` above. If
+``get_ASSYST_deformed_structures`` (``perturb.py``) ever returns zero
+permutations, the second for-loop is exposed to the very same n=0 upstream
+bug; there is currently no guard for that path.
 """
 
 import os
@@ -83,6 +100,20 @@ def select_indices_by_threshold(array, threshold):
     return selected_indices
 
 
+class NoConvergedImagesError(RuntimeError):
+    """Raised by ``collect_structures`` when every candidate image fails the
+    SCF-convergence filter, leaving nothing to return.
+
+    Returning empty ``structures``/``names`` lists instead would feed a
+    length-0 iterable into the next for-loop in ``run_ASSYST_on_structure``,
+    which hits the n=0 sibling of the upstream ``pyiron_workflow==0.19.0``
+    ``ForEach`` bug documented at the top of this module: an opaque
+    ``IndexError: list index out of range`` with no mention of SCF, images,
+    or which loop. Raising here, with the job name and image counts, turns
+    that into an immediately actionable error instead.
+    """
+
+
 @fr.atomic("structures", "names", "energies")
 def collect_structures(vasp_output, job_name, image_selection_eVatom_threshold=-1):
     """Select relaxation images from a parsed VASP directory.
@@ -92,7 +123,8 @@ def collect_structures(vasp_output, job_name, image_selection_eVatom_threshold=-
     time, so the first row is the oldest - the crashed run in a restart chain.
 
     ``image_selection_eVatom_threshold=-1`` keeps only the final image.
-    Images whose SCF did not converge are dropped.
+    Images whose SCF did not converge are dropped; if that leaves nothing,
+    raises ``NoConvergedImagesError`` (see its docstring for why).
     """
     row = vasp_output.iloc[-1]
     json_blobs = row["structures"]
@@ -118,6 +150,15 @@ def collect_structures(vasp_output, job_name, image_selection_eVatom_threshold=-
         structures.append(AseAtomsAdaptor.get_atoms(structure))
         names.append(f"{job_name}_accur_relaxstep{i}")
         kept_energies.append(energies[i])
+
+    if not structures:
+        n_examined = len(selected)
+        n_rejected = sum(1 for i in selected if not scf[i])
+        raise NoConvergedImagesError(
+            f"collect_structures({job_name!r}): no SCF-converged image found; "
+            f"examined {n_examined} image(s), {n_rejected} rejected for "
+            f"non-convergence."
+        )
     return structures, names, kept_energies
 
 
@@ -222,6 +263,14 @@ def run_ASSYST_on_structure(
 
     All work directories are absolute paths derived from ``job_name``; nothing
     depends on the process working directory.
+
+    CAVEAT: unlike every work directory above, ``train_df_filename`` defaults
+    to a CWD-relative path (``"df_ASSYST_jobs.pkl"``), not an absolute path
+    derived from ``job_name``. Concurrent runs for different structures that
+    both leave this default (and share a CWD) will collide, each overwriting
+    the other's pickle. Pass an absolute, job-specific path explicitly for
+    concurrent use; the default is left as-is here for backward compatibility
+    with existing callers.
     """
     relax_incar = set_ionic_steps(incar, ionic_steps)
 

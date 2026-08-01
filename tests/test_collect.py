@@ -4,7 +4,7 @@ import pyiron_workflow as pwf
 import pytest
 from pymatgen.core import Lattice, Structure
 
-from pyiron_workflow_assyst.workflow import collect_structures
+from pyiron_workflow_assyst.workflow import NoConvergedImagesError, collect_structures
 
 
 def _row(lattice_params, n_images, energies, scf, start_time):
@@ -59,5 +59,25 @@ def test_collect_threshold_selects_multiple_images():
     run = pwf.node(collect_structures).run(
         vasp_output=df, job_name="ISIF2", image_selection_eVatom_threshold=0.1
     )
-    assert len(run.outputs.structures) >= 2
-    assert len(run.outputs.structures) == len(run.outputs.names)
+    # Threshold selection compares each candidate to the last SELECTED value
+    # (0.0005 eV/atom from index 0 to 1 -> index 1 skipped; 2.0 eV/atom from
+    # index 0 to 2 -> index 2 selected), so indices 0 and 2 are the only ones
+    # that can come out. `len(structures) == len(names)` alone cannot fail --
+    # both are built in the same loop, appended together -- so it is replaced
+    # with assertions on the actual selected indices/energies, which can.
+    assert run.outputs.names == ["ISIF2_accur_relaxstep0", "ISIF2_accur_relaxstep2"]
+    assert len(run.outputs.structures) == 2
+    assert run.outputs.energies == [-1.0, -3.0]
+
+
+def test_collect_raises_a_clear_error_when_nothing_converges():
+    """If every candidate image fails the SCF filter, collect_structures must
+    raise a clear, named error rather than silently returning empty lists.
+    An empty structures/names pair would otherwise feed a length-0 zip-loop
+    in run_ASSYST_on_structure, which dies deep inside flowrep with an opaque
+    `IndexError: list index out of range` -- the n=0 sibling of the n=1
+    ForEach bug worked around elsewhere in this package (see the module
+    docstring of pyiron_workflow_assyst.workflow)."""
+    df = pd.DataFrame([_row([4.0], 1, [-1.0], [False], 1)])
+    with pytest.raises(NoConvergedImagesError, match="ISIF2"):
+        pwf.node(collect_structures).run(vasp_output=df, job_name="ISIF2")
