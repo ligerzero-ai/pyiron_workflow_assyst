@@ -1,18 +1,8 @@
-"""
-pyiron_workflow_assyst - A workflow package for ASSYST (Automated Symmetry and Stability Testing)
+"""pyiron_workflow_assyst — ASSYST structure generation and DFT workflow.
+
+Intentionally empty during the 0.19 port: eager imports of `workflow` would
+break submodule imports while that module is mid-migration. Task 6 restores
+the explicit public surface.
 """
 
-try:
-    from .workflow import (
-        run_ASSYST_on_structure,
-        get_ASSYST_deformed_structures,
-        collect_structures,
-    )
-    from .structure_filter_utils import RCORE, is_valid_structure
-except ImportError as e:
-    raise ImportError(
-        f"Error importing pyiron_workflow_assyst: {str(e)}. "
-        "Make sure all dependencies are installed correctly."
-    )
-
-__version__ = "0.1.0" 
+__version__ = "0.2.0.dev0" 
