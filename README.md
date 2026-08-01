@@ -38,27 +38,44 @@ pip install -e .
 - numpy>=1.20.0
 - pandas>=1.3.0
 - pymatgen>=2023.0.0
-- pyiron_workflow>=0.1.0
-- pyiron_vasp>=0.1.0
 - ase>=3.22.0
-- pyiron_workflow_vasp
+- pyiron_workflow>=0.19,<0.20
+- flowrep>=0.6,<0.7
+- pyiron_workflow_vasp>=0.2.0
 
 ## Usage
 
-```python
-import pyiron_workflow_assyst as pwfa
+`run_ASSYST_on_structure` is a [`flowrep`](https://github.com/pyiron/flowrep)
+`@fr.workflow` function, not a callable macro object -- under
+`pyiron_workflow>=0.19`, it must be wrapped with `pyiron_workflow.node(...)`
+and run with keyword arguments, not called or `.run()`-ed directly:
 
-# Create a workflow for ASSYST structure generation
-workflow = pwfa.create_assyst_workflow(
-    base_structure=your_structure,
-    n_structures=100,
-    max_strain=0.8,
-    rattle_displacement=0.1
+```python
+import pyiron_workflow as pwf
+from pymatgen.io.vasp.inputs import Incar
+from pyiron_workflow_assyst import run_ASSYST_on_structure
+
+incar = Incar.from_dict({"ENCUT": 400, "ISIF": 7, "NSW": 100, ...})
+
+node = pwf.node(run_ASSYST_on_structure)
+run = node.run(
+    structure=your_structure,      # pymatgen Structure or ase Atoms
+    incar=incar,
+    potcar_paths=None,             # or an explicit list of POTCAR paths
+    job_name="/absolute/path/to/job_dir",
+    vasp_command="mpiexec -n 40 vasp_std",
+    ionic_steps=100,
+    n_stretch_permutations=2,
+    n_rattle_permutations=2,
+    rattle_displacement=0.1,
 )
 
-# Run the workflow
-workflow.run()
+train_df = run.outputs.train_df  # pandas.DataFrame of accurate-statics results
 ```
+
+See `pyiron_workflow_assyst/example.py` for a complete, runnable example, and
+`tests/test_workflow.py` for the full set of keyword arguments
+`run_ASSYST_on_structure` accepts.
 
 ## Documentation
 

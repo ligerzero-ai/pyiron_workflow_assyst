@@ -1,18 +1,43 @@
-"""
-pyiron_workflow_assyst - A workflow package for ASSYST (Automated Symmetry and Stability Testing)
-"""
+"""pyiron_workflow_assyst - ASSYST structure generation and DFT workflow."""
 
-try:
-    from .workflow import (
-        run_ASSYST_on_structure,
-        get_ASSYST_deformed_structures,
-        collect_structures,
-    )
-    from .structure_filter_utils import RCORE, is_valid_structure
-except ImportError as e:
-    raise ImportError(
-        f"Error importing pyiron_workflow_assyst: {str(e)}. "
-        "Make sure all dependencies are installed correctly."
-    )
+from pyiron_workflow_assyst.perturb import (
+    apply_rattle,
+    apply_shear_strain,
+    apply_triaxial_strain,
+    get_ASSYST_deformed_structures,
+)
+from pyiron_workflow_assyst.structure_filter_utils import (
+    RCORE_FALLBACK,
+    filter_distance_by_species,
+    get_minimum_distance,
+    is_valid_structure,
+    rcore_from_potcar,
+    resolve_rcore,
+)
+from pyiron_workflow_assyst.workflow import (
+    NoConvergedImagesError,
+    NoPermutationsGeneratedError,
+    collect_structures,
+    run_ASSYST_on_structure,
+    select_indices_by_threshold,
+)
 
-__version__ = "0.1.0" 
+__version__ = "0.2.0"
+
+__all__ = [
+    "RCORE_FALLBACK",
+    "NoConvergedImagesError",
+    "NoPermutationsGeneratedError",
+    "apply_rattle",
+    "apply_shear_strain",
+    "apply_triaxial_strain",
+    "collect_structures",
+    "filter_distance_by_species",
+    "get_ASSYST_deformed_structures",
+    "get_minimum_distance",
+    "is_valid_structure",
+    "rcore_from_potcar",
+    "resolve_rcore",
+    "run_ASSYST_on_structure",
+    "select_indices_by_threshold",
+]
