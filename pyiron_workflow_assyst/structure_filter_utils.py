@@ -218,29 +218,57 @@ def _element_wise_dist(structure):
     return pair
 
 
-def is_valid_structure(structure, min_dist=1.0, core_overlap_tolerance=0.2):
+def is_valid_structure(
+    structure,
+    min_dist=1.0,
+    core_overlap_tolerance=0.2,
+    potcar_paths=None,
+    min_dist_backend="neighbor_list",
+):
     # Validate both the minimum distance and RCORE-based constraints
-    if get_minimum_distance(structure) < min_dist:
+    if get_minimum_distance(structure, backend=min_dist_backend) < min_dist:
         return False
-    rcore = resolve_rcore(structure)
+    rcore = resolve_rcore(structure, potcar_paths=potcar_paths)
     return filter_distance_by_species(
         structure, rcore, core_overlap_tolerance=core_overlap_tolerance
     )
 
 
-def get_minimum_distance(structure):
-    """
-    Computes the minimum interatomic distance in a structure, excluding self-site distances.
+def get_minimum_distance(structure, backend: str = "neighbor_list") -> float:
+    """Smallest interatomic distance in ``structure``.
 
-    Parameters:
-    structure (Structure): A pymatgen Structure object.
+    ``neighbor_list`` (default) performs a real periodic neighbour search,
+    so it correctly counts an atom's distance to its own periodic image.
 
-    Returns:
-    float: The minimum interatomic distance.
+    ``mic`` uses pymatgen's ``distance_matrix`` with its diagonal (the
+    self-image terms) excluded via ``np.fill_diagonal(..., np.inf)``. That
+    diagonal exclusion throws away every atom's distance to its own
+    periodic image, not just a numerically-degenerate self-term: for a
+    single-atom cell the whole matrix is diagonal, so the "mic" backend
+    always returns inf regardless of how compressed the cell is, and for
+    any cell with a short lattice vector it can miss a genuine short
+    contact along that vector. It is kept only to reproduce campaigns run
+    before this was fixed.
     """
-    distance_matrix = structure.distance_matrix
-    np.fill_diagonal(distance_matrix, np.inf)  # Exclude self-site distances
-    return np.min(distance_matrix)
+    if backend == "mic":
+        distance_matrix = structure.distance_matrix.copy()
+        np.fill_diagonal(distance_matrix, np.inf)  # Exclude self-site distances
+        return float(np.min(distance_matrix))
+    if backend == "neighbor_list":
+        from ase.neighborlist import neighbor_list
+        from pymatgen.io.ase import AseAtomsAdaptor
+
+        atoms = AseAtomsAdaptor.get_atoms(structure)
+        cutoff = 5.0
+        for _ in range(4):
+            distances = neighbor_list("d", atoms, cutoff)
+            if len(distances):
+                return float(distances.min())
+            cutoff *= 2
+        return float("inf")
+    raise ValueError(
+        f"Unknown backend {backend!r}; expected 'neighbor_list' or 'mic'."
+    )
 
 
 def filter_distance_by_species(structure, rcore, core_overlap_tolerance=0.2):
