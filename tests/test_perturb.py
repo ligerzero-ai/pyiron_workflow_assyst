@@ -84,7 +84,23 @@ def test_every_returned_structure_passes_the_validity_filter(fe_structure):
 
 def test_gives_up_after_max_attempts_rather_than_looping_forever(two_species_structure):
     """A structure that cannot be validly deformed must terminate, returning
-    fewer structures than requested rather than hanging."""
+    FEWER structures than requested rather than hanging.
+
+    ``len(structures) == len(job_names)`` is structurally guaranteed (both
+    are appended together in the same loop iteration -- see
+    ``get_ASSYST_deformed_structures``), so it cannot fail and proves
+    nothing about the retry cap. And ``status == "finished"`` only catches a
+    hang, not a silent "produced everything anyway" regression: raising
+    ``max_attempts`` back to a value large enough to actually succeed would
+    also leave that assertion green. The real contract under test is that
+    the generator gives up rather than looping forever -- i.e. that it
+    returns strictly fewer than the 6 requested (2 rattle + 2 triax + 2
+    shear) permutations, and specifically the 4 that this exact
+    seed/max_attempts/rattle_displacement combination is known to produce:
+    both rattle variants and both triaxial variants succeed, but shear can
+    never clear the validity filter within 5 attempts for this tight,
+    two-atom cell.
+    """
     atoms = AseAtomsAdaptor.get_atoms(two_species_structure)
     run = pwf.node(get_ASSYST_deformed_structures).run(
         structure_list=[atoms],
@@ -95,5 +111,16 @@ def test_gives_up_after_max_attempts_rather_than_looping_forever(two_species_str
         max_attempts=5,
         seed=3,
     )
-    assert len(run.outputs.all_structures) == len(run.outputs.job_names)
     assert run.status == "finished"
+    assert len(run.outputs.all_structures) == len(run.outputs.job_names)
+    assert len(run.outputs.all_structures) < 6, (
+        "expected fewer than the 6 requested permutations (retry cap must "
+        "actually bite for this structure); got "
+        f"{len(run.outputs.all_structures)}"
+    )
+    assert run.outputs.job_names == [
+        "tight_rattle_1",
+        "tight_rattle_2",
+        "tight_triax_1",
+        "tight_triax_2",
+    ]
