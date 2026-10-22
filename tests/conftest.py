@@ -4,6 +4,13 @@ from pathlib import Path
 import pytest
 from pymatgen.core import Lattice, Structure
 
+
+def pytest_configure(config):
+    # Also registered in pyproject.toml; repeated here so a run from a copy of
+    # tests/ outside the checkout (the clean-install CI) knows the marker too.
+    config.addinivalue_line("markers", "slow: end-to-end graph tests")
+
+
 # RCORE (bohr) written into the fake POTCARs below -- the real potpaw_64 GGA
 # values for each element's default variant, so code reading them behaves
 # exactly as it would against a real library.
