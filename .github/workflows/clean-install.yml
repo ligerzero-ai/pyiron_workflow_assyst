@@ -1,0 +1,80 @@
+# Checks that the package installs and works from its built artifacts in a
+# fresh environment: no editable install, no --no-build-isolation, no
+# pre-installed runtime dependencies, tests run from outside the checkout.
+#
+# NOTE: this depends on pyiron_workflow_vasp>=0.2.0 from PyPI. Until that
+# release is published, the install step cannot resolve and this workflow
+# is expected to fail; it needs no change once the release is out.
+
+name: clean-install
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build sdist and wheel (isolated)
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+          python -m twine check --strict dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  install-and-test:
+    needs: build
+    runs-on: ubuntu-latest
+    # pyiron_workflow_vasp does not declare Python 3.13 support yet; report
+    # 3.13 results without blocking on them.
+    continue-on-error: ${{ matrix.python-version == '3.13' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+        artifact: [wheel, sdist]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: ${{ runner.temp }}/dist
+      - name: Install from the ${{ matrix.artifact }} into a fresh venv
+        working-directory: ${{ runner.temp }}
+        run: |
+          python -m venv venv
+          venv/bin/python -m pip install --upgrade pip
+          if [ "${{ matrix.artifact }}" = wheel ]; then
+            pkg=$(ls dist/*.whl)
+          else
+            pkg=$(ls dist/*.tar.gz)
+          fi
+          venv/bin/python -m pip install "${pkg}[test]"
+      - name: Import the installed package
+        working-directory: ${{ runner.temp }}
+        run: |
+          venv/bin/python -c "
+          import pyiron_workflow_assyst as pkg
+          print(pkg.__version__, pkg.__file__)
+          assert '${{ github.workspace }}' not in pkg.__file__
+          "
+      - name: Run the test suite against the installed package
+        working-directory: ${{ runner.temp }}
+        run: |
+          cp -r "${{ github.workspace }}/tests" tests
+          venv/bin/python -m pytest -p no:cacheprovider --rootdir tests tests -ra
