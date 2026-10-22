@@ -1,12 +1,23 @@
+from importlib.metadata import requires
+
 import pyiron_workflow as pwf
+from packaging.requirements import Requirement
 
 
-def test_pyiron_workflow_is_019():
-    assert pwf.__version__.startswith("0.19")
+def test_pyiron_workflow_within_declared_range():
+    """The installed pyiron_workflow must satisfy this package's own declared
+    range, read back from the installed metadata so the test cannot drift
+    from pyproject.toml."""
+    (spec,) = [
+        Requirement(r).specifier
+        for r in requires("pyiron_workflow_assyst")
+        if Requirement(r).name.replace("_", "-") == "pyiron-workflow"
+    ]
+    assert spec.contains(pwf.__version__), f"{pwf.__version__} not in {spec}"
 
 
 def test_vasp_dependency_is_ported_version():
-    """"Ported version" is judged by API shape, not a version-string floor.
+    """ "Ported version" is judged by API shape, not a version-string floor.
 
     pyiron_workflow_vasp uses versioneer (git-describe-derived dev versions
     off its last tag, currently ``pyiron_workflow_vasp-0.1.0``), so its
@@ -44,5 +55,7 @@ def test_all_advertised_exports_resolve():
 
     assert len(pwa.__all__) > 0
     for name in pwa.__all__:
-        assert hasattr(pwa, name), f"__all__ advertises {name!r}, but it does not resolve"
+        assert hasattr(
+            pwa, name
+        ), f"__all__ advertises {name!r}, but it does not resolve"
         assert getattr(pwa, name) is not None

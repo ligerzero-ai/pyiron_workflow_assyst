@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pyiron_workflow_assyst"
-version = "0.2.0"
+dynamic = ["version"]
 description = "A workflow package for ASSYST (Automated Symmetry and Stability Testing) using VASP calculations"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
@@ -19,16 +19,15 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Physics",
     "License :: OSI Approved :: BSD License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
 
 dependencies = [
-    "pyiron_workflow>=0.19,<0.20",
+    "pyiron_workflow>=0.19,<0.21",
     "flowrep>=0.6,<0.7",
-    "pyiron_workflow_vasp>=0.2.0",
+    "pyiron_workflow_vasp>=0.2.0,<0.3",
     "pymatgen>=2023.0.0",
     "ase>=3.22.0",
     "numpy>=1.20.0",
@@ -36,6 +35,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+test = [
+    "pytest>=6.0",
+    "packaging",
+    # tests/test_collect.py and tests/test_concat_and_save.py parse the
+    # committed VASP fixtures with vaspparser directly.
+    "vaspparser",
+]
 dev = [
     "pytest>=6.0",
     "pytest-cov>=2.0",
@@ -49,17 +55,20 @@ notebook = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/pyiron/pyiron_workflow_assyst"
-Documentation = "https://github.com/pyiron/pyiron_workflow_assyst"
-Repository = "https://github.com/pyiron/pyiron_workflow_assyst.git"
-"Bug Tracker" = "https://github.com/pyiron/pyiron_workflow_assyst/issues"
+Homepage = "https://github.com/ligerzero-ai/pyiron_workflow_assyst"
+Documentation = "https://github.com/ligerzero-ai/pyiron_workflow_assyst"
+Repository = "https://github.com/ligerzero-ai/pyiron_workflow_assyst.git"
+"Bug Tracker" = "https://github.com/ligerzero-ai/pyiron_workflow_assyst/issues"
+
+[tool.hatch.version]
+path = "pyiron_workflow_assyst/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["pyiron_workflow_assyst"]
 
 [tool.black]
 line-length = 88
-target-version = ['py38']
+target-version = ['py311']
 include = '\.pyi?$'
 
 [tool.isort]
