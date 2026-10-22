@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.2.1] - Unreleased
+
+### Added
+
+- Python 3.14 support (`requires-python = ">=3.11,<3.15"`). On Python 3.14
+  this needs `pyiron_workflow_vasp>=0.2.1` (the first vasp release that allows
+  3.14); resolvers select it automatically, so the declared floor stays at
+  0.2.0, which remains the true API floor.
+
 ## [0.2.0] - Unreleased
 
 ### Changed
