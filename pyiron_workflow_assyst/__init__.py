@@ -22,7 +22,7 @@ from pyiron_workflow_assyst.workflow import (
     select_indices_by_threshold,
 )
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 __all__ = [
     "RCORE_FALLBACK",
