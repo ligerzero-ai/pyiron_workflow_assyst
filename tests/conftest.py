@@ -1,6 +1,61 @@
-import numpy as np
+import os
+from pathlib import Path
+
 import pytest
 from pymatgen.core import Lattice, Structure
+
+# RCORE (bohr) written into the fake POTCARs below -- the real potpaw_64 GGA
+# values for each element's default variant, so code reading them behaves
+# exactly as it would against a real library.
+FAKE_POTCAR_RCORE_BOHR = {"Fe": 2.300, "H": 1.100, "Ce": 2.700}
+
+
+@pytest.fixture
+def fake_potcar_library(tmp_path, monkeypatch):
+    """Point pyiron_workflow_vasp at a throwaway config and POTCAR tree.
+
+    Anything that resolves default POTCARs (``VaspInput``/``write_POTCAR``,
+    ``resolve_rcore`` without ``potcar_paths``) otherwise needs the user's
+    real ``~/.pyiron_vasp_config`` and licensed POTCAR files. Each fake
+    POTCAR carries just the TITEL/RCORE lines this package reads, for the
+    default variant of every element in ``FAKE_POTCAR_RCORE_BOHR``.
+    pyiron_workflow_vasp resolves its config path at import and caches the
+    parsed config, so both are reset here (monkeypatch restores the path).
+    """
+    from ase import Atoms
+    from pyiron_workflow_vasp import vasp as _vasp
+
+    resources = tmp_path / "pyiron_vasp_resources"
+    cfg = tmp_path / ".pyiron_vasp_config"
+    cfg.write_text(
+        "default_POTCAR_set = potpaw64\n"
+        "default_functional = GGA\n"
+        f"pyiron_vasp_resources = {resources}\n"
+        "vasp_POTCAR_path_potpaw64 = {pyiron_vasp_resources}/potpaw_64\n"
+    )
+    monkeypatch.setenv("PYIRON_VASP_CONFIG", str(cfg))
+    monkeypatch.setattr(_vasp, "DEFAULT_CONFIG_PATH", cfg)
+    _vasp._get_potcar_config.cache_clear()
+
+    symbols = list(FAKE_POTCAR_RCORE_BOHR)
+    paths = _vasp.get_default_POTCAR_paths(
+        Atoms(symbols, positions=[[float(i), 0.0, 0.0] for i in range(len(symbols))]),
+        _vasp._default_POTCAR_library_path(),
+        _vasp._default_functional(),
+    )
+    for symbol, path in zip(symbols, paths):
+        variant = Path(path).parent.name
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        Path(path).write_text(
+            f"  PAW_PBE {variant} 01Jan2000\n"
+            f"   TITEL  = PAW_PBE {variant} 01Jan2000\n"
+            f"   RCORE  =    {FAKE_POTCAR_RCORE_BOHR[symbol]:.3f}"
+            "    outmost cutoff radius\n"
+        )
+    try:
+        yield resources
+    finally:
+        _vasp._get_potcar_config.cache_clear()
 
 
 @pytest.fixture
