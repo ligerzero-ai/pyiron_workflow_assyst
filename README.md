@@ -25,13 +25,19 @@ ASSYST is a strategy for generating unbiased and systematically extendable train
 pip install pyiron_workflow_assyst
 ```
 
-For development installation:
+For development installation (with the test dependencies):
 
 ```bash
-git clone https://github.com/pyiron/pyiron_workflow_assyst.git
+git clone https://github.com/ligerzero-ai/pyiron_workflow_assyst.git
 cd pyiron_workflow_assyst
-pip install -e .
+pip install -e ".[test]"
+pytest
 ```
+
+The VASP-facing parts of the workflow read POTCARs through
+`pyiron_workflow_vasp`'s `~/.pyiron_vasp_config` (or the file named by
+`PYIRON_VASP_CONFIG`); see that package for how to set it up. The test suite
+does not need one.
 
 ## Dependencies
 
@@ -39,9 +45,9 @@ pip install -e .
 - pandas>=1.3.0
 - pymatgen>=2023.0.0
 - ase>=3.22.0
-- pyiron_workflow>=0.19,<0.20
+- pyiron_workflow>=0.19,<0.21
 - flowrep>=0.6,<0.7
-- pyiron_workflow_vasp>=0.2.0
+- pyiron_workflow_vasp>=0.2.0,<0.3
 
 ## Usage
 
@@ -73,17 +79,19 @@ run = node.run(
 train_df = run.outputs.train_df  # pandas.DataFrame of accurate-statics results
 ```
 
-See `pyiron_workflow_assyst/example.py` for a complete, runnable example, and
+See `examples/example.py` for a complete example (edit its cluster-specific
+POTCAR path, output directory and `vasp_command` before running it), and
 `tests/test_workflow.py` for the full set of keyword arguments
 `run_ASSYST_on_structure` accepts.
 
 ## Documentation
 
-For detailed documentation, please refer to the [documentation](https://github.com/pyiron/pyiron_workflow_assyst).
+For detailed documentation, please refer to the [documentation](https://github.com/ligerzero-ai/pyiron_workflow_assyst).
 
 ## Contributing
 
-We welcome contributions! Please see our [contributing guidelines](CONTRIBUTING.md) for details.
+We welcome contributions! Please open an issue or pull request on
+[GitHub](https://github.com/ligerzero-ai/pyiron_workflow_assyst).
 
 ## License
 
