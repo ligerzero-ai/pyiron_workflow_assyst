@@ -12,6 +12,10 @@ from pyiron_workflow_assyst.workflow import (
     run_ASSYST_on_structure,
 )
 
+# The graph writes real POTCARs (potcar_paths=None -> default selection), so
+# every test here runs against a throwaway POTCAR library, not the user's.
+pytestmark = pytest.mark.usefixtures("fake_potcar_library")
+
 
 def _fake_parser(directory):
     """Stand in for parse_vasp_directory with a realistically-shaped frame."""
@@ -178,17 +182,16 @@ def _assert_isif_chain(job_dir, ionic_steps):
     a5 = _read_poscar_lattice_a(isif5_dir)
     a2 = _read_poscar_lattice_a(isif2_dir)
 
-    assert a7 == pytest.approx(_INITIAL_LATTICE_A), (
-        "ISIF7 POSCAR must be the workflow's input structure"
-    )
+    assert a7 == pytest.approx(
+        _INITIAL_LATTICE_A
+    ), "ISIF7 POSCAR must be the workflow's input structure"
     assert a5 == pytest.approx(_FED_FORWARD_LATTICE_A), (
         "ISIF5 POSCAR must be built from ISIF7's parsed output, not the "
         "original structure (feed-forward broken)"
     )
-    assert a2 == pytest.approx(a5), (
-        "ISIF2 POSCAR must be built from ISIF5's parsed output "
-        "(feed-forward broken)"
-    )
+    assert a2 == pytest.approx(
+        a5
+    ), "ISIF2 POSCAR must be built from ISIF5's parsed output (feed-forward broken)"
 
 
 @pytest.mark.slow

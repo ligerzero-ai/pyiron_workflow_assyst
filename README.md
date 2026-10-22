@@ -25,13 +25,19 @@ ASSYST is a strategy for generating unbiased and systematically extendable train
 pip install pyiron_workflow_assyst
 ```
 
-For development installation:
+For development installation (with the test dependencies):
 
 ```bash
-git clone https://github.com/pyiron/pyiron_workflow_assyst.git
+git clone https://github.com/ligerzero-ai/pyiron_workflow_assyst.git
 cd pyiron_workflow_assyst
-pip install -e .
+pip install -e ".[test]"
+pytest
 ```
+
+The VASP-facing parts of the workflow read POTCARs through
+`pyiron_workflow_vasp`'s `~/.pyiron_vasp_config` (or the file named by
+`PYIRON_VASP_CONFIG`); see that package for how to set it up. The test suite
+does not need one.
 
 ## Dependencies
 
@@ -39,9 +45,9 @@ pip install -e .
 - pandas>=1.3.0
 - pymatgen>=2023.0.0
 - ase>=3.22.0
-- pyiron_workflow>=0.19,<0.20
+- pyiron_workflow>=0.19,<0.21
 - flowrep>=0.6,<0.7
-- pyiron_workflow_vasp>=0.2.0
+- pyiron_workflow_vasp>=0.2.0,<0.3
 
 ## Usage
 
@@ -73,17 +79,40 @@ run = node.run(
 train_df = run.outputs.train_df  # pandas.DataFrame of accurate-statics results
 ```
 
-See `pyiron_workflow_assyst/example.py` for a complete, runnable example, and
+See `examples/example.py` for a complete example (edit its cluster-specific
+POTCAR path, output directory and `vasp_command` before running it), and
 `tests/test_workflow.py` for the full set of keyword arguments
 `run_ASSYST_on_structure` accepts.
 
 ## Documentation
 
-For detailed documentation, please refer to the [documentation](https://github.com/pyiron/pyiron_workflow_assyst).
+For detailed documentation, please refer to the [documentation](https://github.com/ligerzero-ai/pyiron_workflow_assyst).
+
+## Releasing
+
+Releases go to PyPI from GitHub Actions via
+[trusted publishing](https://docs.pypi.org/trusted-publishers/), so no API token
+is stored anywhere.
+
+1. Bump `__version__` in `pyiron_workflow_assyst/__init__.py` (the only place the version lives) and add
+   an entry to [`CHANGELOG.md`](CHANGELOG.md).
+2. Open a PR and merge it to `main`. The
+   [`release`](.github/workflows/release.yml) workflow builds the sdist and
+   wheel and runs `twine check --strict` on every PR as a dry run.
+3. Create a GitHub release with tag `v<version>` (e.g. `v0.2.0`). Publishing
+   the release builds again, checks that the tag matches the package version
+   (a `v` or `pyiron_workflow_assyst-` prefix is stripped), and uploads to
+   [PyPI](https://pypi.org/p/pyiron_workflow_assyst).
+
+One-time setup: on PyPI, add a trusted publisher for `pyiron_workflow_assyst` with owner
+`ligerzero-ai`, repository `pyiron_workflow_assyst`, workflow `release.yml` and environment
+`pypi`, and create a `pypi` environment in the GitHub repository settings
+(optionally with required reviewers).
 
 ## Contributing
 
-We welcome contributions! Please see our [contributing guidelines](CONTRIBUTING.md) for details.
+We welcome contributions! Please open an issue or pull request on
+[GitHub](https://github.com/ligerzero-ai/pyiron_workflow_assyst).
 
 ## License
 

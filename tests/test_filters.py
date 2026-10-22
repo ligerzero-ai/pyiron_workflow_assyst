@@ -1,6 +1,6 @@
+import os
 import warnings
 
-import numpy as np
 import pytest
 
 from pyiron_workflow_assyst.structure_filter_utils import (
@@ -20,14 +20,54 @@ TI_SV_POTCAR = (
     "/cmmc/u/hmai/pyiron-resources-cmmc/vasp/potentials/"
     "pyiron_nodes/potpaw_64/GGA/Ti_sv/POTCAR"
 )
+TI_POTCAR = (
+    "/cmmc/u/hmai/pyiron-resources-cmmc/vasp/potentials/"
+    "pyiron_nodes/potpaw_64/GGA/Ti/POTCAR"
+)
+
+# POTCARs are licensed and cannot ship with the tests: the assertions on
+# exact RCORE values from real files only run where those files exist.
+requires_cmmc_potcars = pytest.mark.skipif(
+    not all(os.path.isfile(p) for p in (FE_POTCAR, TI_SV_POTCAR, TI_POTCAR)),
+    reason="real potpaw_64 POTCARs not available",
+)
 
 
+def _default_potcars_installed(*symbols):
+    """Whether the user's .pyiron_vasp_config resolves to real POTCAR files."""
+    try:
+        from ase import Atoms
+        from pyiron_workflow_vasp.vasp import (
+            _default_functional,
+            _default_POTCAR_library_path,
+            get_default_POTCAR_paths,
+        )
+
+        atoms = Atoms(
+            symbols, positions=[[float(i), 0, 0] for i in range(len(symbols))]
+        )
+        paths = get_default_POTCAR_paths(
+            atoms, _default_POTCAR_library_path(), _default_functional()
+        )
+    except Exception:  # noqa: BLE001 - pyiron_workflow_vasp raises bare Exception
+        return False
+    return all(os.path.isfile(p) for p in paths)
+
+
+requires_default_potcars = pytest.mark.skipif(
+    not _default_potcars_installed("Fe", "Ce"),
+    reason="no .pyiron_vasp_config with real default POTCARs",
+)
+
+
+@requires_cmmc_potcars
 def test_rcore_from_potcar_reads_fe():
     rc = rcore_from_potcar(FE_POTCAR)
     assert set(rc) == {"Fe"}
     assert rc["Fe"] == pytest.approx(2.300 * BOHR, abs=1e-4)
 
 
+@requires_cmmc_potcars
 def test_rcore_from_potcar_maps_sv_variant_to_bare_element():
     """Ti_sv must key as 'Ti' - the filter looks up by element symbol."""
     rc = rcore_from_potcar(TI_SV_POTCAR)
@@ -44,21 +84,19 @@ def test_resolve_rcore_uses_semicore_defaults_matching_past_campaigns(fe_structu
     assert resolve_rcore(fe_structure)["Fe"] == pytest.approx(1.2171, abs=1e-3)
 
 
+@requires_cmmc_potcars
 def test_resolve_rcore_honours_explicit_potcar_paths():
     """An explicit plain-Ti POTCAR must give the larger plain radius, not the
     semicore default - this is the case a hardcoded table gets wrong."""
     from pymatgen.core import Lattice, Structure
 
-    plain_ti = (
-        "/cmmc/u/hmai/pyiron-resources-cmmc/vasp/potentials/"
-        "pyiron_nodes/potpaw_64/GGA/Ti/POTCAR"
-    )
     ti = Structure(Lattice.cubic(3.3), ["Ti"], [[0.0, 0.0, 0.0]])
-    rc = resolve_rcore(ti, potcar_paths=[plain_ti])
+    rc = resolve_rcore(ti, potcar_paths=[TI_POTCAR])
     assert rc["Ti"] == pytest.approx(2.800 * BOHR, abs=1e-3)
     assert rc["Ti"] > resolve_rcore(ti)["Ti"], "plain must exceed semicore"
 
 
+@requires_cmmc_potcars
 def test_resolve_rcore_warns_on_conflicting_potcar_paths_and_last_wins():
     """Ti and Ti_sv both key as bare 'Ti' (see
     test_rcore_from_potcar_maps_sv_variant_to_bare_element) but carry
@@ -69,15 +107,11 @@ def test_resolve_rcore_warns_on_conflicting_potcar_paths_and_last_wins():
     """
     from pymatgen.core import Lattice, Structure
 
-    plain_ti = (
-        "/cmmc/u/hmai/pyiron-resources-cmmc/vasp/potentials/"
-        "pyiron_nodes/potpaw_64/GGA/Ti/POTCAR"
-    )
     ti = Structure(Lattice.cubic(3.3), ["Ti"], [[0.0, 0.0, 0.0]])
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        rc = resolve_rcore(ti, potcar_paths=[TI_SV_POTCAR, plain_ti])
+        rc = resolve_rcore(ti, potcar_paths=[TI_SV_POTCAR, TI_POTCAR])
     assert rc["Ti"] == pytest.approx(2.800 * BOHR, abs=1e-3), "later path must win"
     assert any(
         "conflicting" in str(w.message) and "Ti" in str(w.message) for w in caught
@@ -95,6 +129,7 @@ def test_resolve_rcore_falls_back_and_warns_on_unreadable_potcar():
     assert any("POTCAR" in str(w.message) for w in caught), "must warn on fallback"
 
 
+@requires_default_potcars
 def test_resolve_rcore_default_path_reads_potcar_without_warning(fe_structure):
     """RCORE_FALLBACK is, by construction, identical to the default-POTCAR
     values (that is the whole point of Task 2), so a value-only comparison
@@ -108,6 +143,7 @@ def test_resolve_rcore_default_path_reads_potcar_without_warning(fe_structure):
     assert caught == [], f"unexpected warnings: {[str(w.message) for w in caught]}"
 
 
+@requires_default_potcars
 def test_resolve_rcore_default_path_reads_potcar_for_element_absent_from_fallback():
     """Ce has no entry in RCORE_FALLBACK - confirmed below - so only a
     genuine POTCAR read can produce a value for it here; the fallback path
@@ -122,6 +158,27 @@ def test_resolve_rcore_default_path_reads_potcar_for_element_absent_from_fallbac
     ce = Structure(Lattice.cubic(5.0), ["Ce"], [[0.0, 0.0, 0.0]])
     rc = resolve_rcore(ce)
     assert rc["Ce"] == pytest.approx(2.700 * BOHR, abs=1e-4)
+
+
+def test_resolve_rcore_default_path_reads_fake_library_without_warning(
+    fake_potcar_library, fe_structure
+):
+    """Portable counterpart of the two real-library tests above: the
+    default-selection branch must find, read and key a POTCAR from whatever
+    library .pyiron_vasp_config names -- here a throwaway one -- without
+    falling back. Ce, absent from RCORE_FALLBACK, can only resolve via a
+    genuine read.
+    """
+    from pymatgen.core import Lattice, Structure
+
+    ce = Structure(Lattice.cubic(5.0), ["Ce"], [[0.0, 0.0, 0.0]])
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        rc_fe = resolve_rcore(fe_structure)
+        rc_ce = resolve_rcore(ce)
+    assert caught == [], f"unexpected warnings: {[str(w.message) for w in caught]}"
+    assert rc_fe["Fe"] == pytest.approx(2.300 * BOHR, abs=1e-4)
+    assert rc_ce["Ce"] == pytest.approx(2.700 * BOHR, abs=1e-4)
 
 
 def test_mic_backend_overestimates_distance_in_sheared_cell(sheared_cell):
@@ -227,9 +284,7 @@ def test_backends_agree_on_an_undistorted_cell(two_species_structure):
     already been verified numerically robust - so both backends should
     agree here.
     """
-    assert get_minimum_distance(
-        two_species_structure, backend="mic"
-    ) == pytest.approx(
+    assert get_minimum_distance(two_species_structure, backend="mic") == pytest.approx(
         get_minimum_distance(two_species_structure, backend="neighbor_list"),
         rel=1e-6,
     )
