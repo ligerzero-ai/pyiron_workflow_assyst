@@ -62,6 +62,7 @@ jobs:
             pkg=$(ls dist/*.tar.gz)
           fi
           venv/bin/python -m pip install "${pkg}[test]"
+          venv/bin/python -m pip check
       - name: Import the installed package
         working-directory: ${{ runner.temp }}
         run: |
