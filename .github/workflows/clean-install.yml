@@ -35,9 +35,6 @@ jobs:
   install-and-test:
     needs: build
     runs-on: ubuntu-latest
-    # pyiron_workflow_vasp does not declare Python 3.13 support yet; report
-    # 3.13 results without blocking on them.
-    continue-on-error: ${{ matrix.python-version == '3.13' }}
     strategy:
       fail-fast: false
       matrix:
