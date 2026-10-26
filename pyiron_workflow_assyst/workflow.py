@@ -311,6 +311,46 @@ def set_ionic_steps(incar, ionic_steps):
     return modified
 
 
+#: What the accurate statics change relative to the relaxation INCAR when the
+#: caller passes no ``static_incar``: a denser k-mesh, tighter electronic and
+#: ionic convergence, reciprocal-space projection, and no ionic steps.  These
+#: are the values every ASSYST campaign has used for its training labels.
+STATIC_INCAR_OVERRIDES = {
+    "KSPACING": 0.25,
+    "EDIFFG": 1e-4,
+    "EDIFF": 1e-5,
+    "LREAL": False,
+    "NSW": 0,
+}
+
+
+@fr.atomic("incar")
+def build_static_incar(incar, static_incar):
+    """The INCAR for the accurate statics (the training labels).
+
+    ``static_incar=None`` reproduces the historical behaviour exactly: the
+    relaxation ``incar`` with :data:`STATIC_INCAR_OVERRIDES` applied on top.
+    Otherwise ``static_incar`` is taken as the complete statics INCAR, written
+    as given, so a caller can tune the label calculations (``ENCUT``,
+    ``KSPACING``, smearing, ``NELM``, ...) independently of the relaxation
+    stages.  Two things are enforced either way, because a statics job that
+    violated them would not be a statics job: ``NSW`` is 0, and ``ISIF`` is
+    absent (see :func:`strip_isif`).
+
+    A ``@fr.workflow`` body cannot branch on ``static_incar is None`` inline,
+    hence this node.
+    """
+    if static_incar is None:
+        modified = generate_modified_incar(incar, STATIC_INCAR_OVERRIDES)
+    else:
+        modified = generate_modified_incar(
+            Incar.from_dict(dict(static_incar)), {"NSW": 0}
+        )
+    modified = Incar.from_dict(dict(modified))
+    modified.pop("ISIF", None)
+    return modified
+
+
 @fr.atomic("incar")
 def strip_isif(incar):
     """Drop any ``ISIF`` tag left over from the caller's raw INCAR.
@@ -597,9 +637,17 @@ def run_ASSYST_on_structure(
     train_df_filename="df_ASSYST_jobs.pkl",
     seed=None,
     vasp_parser_function=None,
+    static_incar=None,
 ):
     """Relax a structure through ISIF 7 -> 5 -> 2, then run accurate statics on
     the converged images and on rattle/triaxial/shear permutations of them.
+
+    ``incar`` drives the three relaxation stages (with ``NSW=ionic_steps`` and
+    the stage's ``ISIF`` set).  ``static_incar`` is the INCAR for the accurate
+    statics that produce the training labels; ``None`` (the default) derives it
+    from ``incar`` by applying :data:`STATIC_INCAR_OVERRIDES`, which is what
+    every campaign before this parameter existed did.  Either way the statics
+    run with ``NSW=0`` and no ``ISIF`` -- see :func:`build_static_incar`.
 
     All work directories are absolute paths derived from ``job_name``; nothing
     depends on the process working directory.
@@ -684,10 +732,7 @@ def run_ASSYST_on_structure(
         out2, "ISIF2", image_selection_eVatom_threshold, nelm=isif2_nelm
     )
 
-    accurate_incar = generate_modified_incar(
-        incar,
-        {"KSPACING": 0.25, "EDIFFG": 1e-4, "EDIFF": 1e-5, "LREAL": False, "NSW": 0},
-    )
+    accurate_incar = build_static_incar(incar, static_incar)
     accurate_incar = strip_isif(accurate_incar)
     accurate_nelm = extract_nelm(accurate_incar)
 

@@ -15,22 +15,26 @@ from pyiron_workflow_assyst.structure_filter_utils import (
     resolve_rcore,
 )
 from pyiron_workflow_assyst.workflow import (
+    STATIC_INCAR_OVERRIDES,
     NoConvergedImagesError,
     NoPermutationsGeneratedError,
+    build_static_incar,
     collect_structures,
     run_ASSYST_on_structure,
     select_indices_by_threshold,
 )
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 
 __all__ = [
     "RCORE_FALLBACK",
+    "STATIC_INCAR_OVERRIDES",
     "NoConvergedImagesError",
     "NoPermutationsGeneratedError",
     "apply_rattle",
     "apply_shear_strain",
     "apply_triaxial_strain",
+    "build_static_incar",
     "collect_structures",
     "filter_distance_by_species",
     "get_ASSYST_deformed_structures",

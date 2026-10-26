@@ -4,7 +4,20 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/).
 
-## [0.2.1] - Unreleased
+## [0.2.2] - Unreleased
+
+### Added
+
+- `run_ASSYST_on_structure(..., static_incar=None)`: an optional, complete
+  INCAR for the accurate statics that produce the training labels, so the
+  label calculations can be tuned (`ENCUT`, `KSPACING`, smearing, `NELM`, ...)
+  independently of the relaxation stages. `None` keeps the historical
+  behaviour exactly: the relaxation `incar` with `STATIC_INCAR_OVERRIDES`
+  (`KSPACING 0.25`, `EDIFF 1e-5`, `EDIFFG 1e-4`, `LREAL False`, `NSW 0`)
+  applied. Whatever is passed, the statics run with `NSW=0` and no `ISIF`.
+  `STATIC_INCAR_OVERRIDES` and the `build_static_incar` node are exported.
+
+## [0.2.1] - 2026-10-22
 
 ### Added
 
@@ -13,7 +26,7 @@ All notable changes to this project are documented here. The format follows
   3.14); resolvers select it automatically, so the declared floor stays at
   0.2.0, which remains the true API floor.
 
-## [0.2.0] - Unreleased
+## [0.2.0] - 2026-10-22
 
 ### Changed
 

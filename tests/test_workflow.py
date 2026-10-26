@@ -352,3 +352,69 @@ def test_assyst_graph_has_the_expected_isif_chain():
         f"expected exactly 2 for_each fan-outs (base images, permutations), "
         f"got {for_each_labels}"
     )
+
+
+@pytest.mark.slow
+def test_static_incar_drives_the_label_calculations_only(tmp_path):
+    """``static_incar`` is the complete INCAR of every accurate-statics job,
+    while the relaxation stages keep running on ``incar``. The two invariants
+    that make a statics job a statics job -- NSW=0 and no ISIF -- hold even
+    when the caller's ``static_incar`` carries NSW=3 and ISIF=7, and the
+    historical overrides (KSPACING 0.25, EDIFF 1e-5, ...) are NOT applied on
+    top of a caller-supplied statics INCAR."""
+    static = Incar.from_dict(
+        {"ENCUT": 520, "ISPIN": 1, "KSPACING": 0.2, "EDIFF": 1e-6, "NSW": 3, "ISIF": 7}
+    )
+    run, job_dir = _run_graph(tmp_path, static_incar=static)
+    assert run.status == "finished", f"graph failed: {run.exception}"
+
+    for stage, isif in (("ISIF7", 7), ("ISIF5", 5), ("ISIF2", 2)):
+        incar = _read_incar(os.path.join(job_dir, stage))
+        _assert_relax_incar(os.path.join(job_dir, stage), isif, 5)
+        assert incar["ENCUT"] == 300, f"{stage}: relaxation must not see static_incar"
+
+    static_dirs = [
+        os.path.join(job_dir, name)
+        for name in (
+            _BASE_IMAGE_NAME,
+            f"{_BASE_IMAGE_NAME}_rattle_1",
+            f"{_BASE_IMAGE_NAME}_shear_1",
+            f"{_BASE_IMAGE_NAME}_triax_1",
+        )
+    ]
+    for directory in static_dirs:
+        incar = _read_incar(directory)
+        assert incar["ENCUT"] == 520, f"{directory}: static_incar not used"
+        assert incar["KSPACING"] == pytest.approx(
+            0.2
+        ), f"{directory}: historical 0.25 applied over static_incar"
+        assert incar["EDIFF"] == pytest.approx(
+            1e-6
+        ), f"{directory}: historical EDIFF applied over static_incar"
+        assert (
+            "EDIFFG" not in incar
+        ), f"{directory}: historical EDIFFG applied over static_incar"
+        assert (
+            "LREAL" not in incar
+        ), f"{directory}: historical LREAL applied over static_incar"
+        assert incar["NSW"] == 0, f"{directory}: static job must not relax ions"
+        assert "ISIF" not in incar, f"{directory}: static job must not carry ISIF"
+
+
+def test_build_static_incar_default_equals_the_historical_overrides():
+    from pyiron_workflow_assyst.workflow import (
+        STATIC_INCAR_OVERRIDES,
+        build_static_incar,
+    )
+
+    incar = Incar.from_dict({"ENCUT": 300, "ISIF": 7, "NSW": 500, "KSPACING": 0.5})
+    got = build_static_incar(incar, None)  # an atomic node is a plain callable
+    for key, value in STATIC_INCAR_OVERRIDES.items():
+        assert got[key] == value
+    assert got["ENCUT"] == 300 and "ISIF" not in got
+
+    explicit = build_static_incar(incar, {"ENCUT": 520, "NSW": 3, "ISIF": 2})
+    assert explicit["ENCUT"] == 520 and explicit["NSW"] == 0 and "ISIF" not in explicit
+    assert (
+        "KSPACING" not in explicit
+    )  # nothing historical is layered over a caller's statics INCAR
